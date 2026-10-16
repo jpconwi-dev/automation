@@ -1,0 +1,20 @@
+# Ollama has no published port: only the backend can reach it. Backend binds to localhost only.
+services:
+  ollama:
+    image: ollama/ollama
+    volumes: ["ollama:/root/.ollama"]
+    # GPU (NVIDIA): uncomment
+    # deploy: { resources: { reservations: { devices: [{ driver: nvidia, count: all, capabilities: [gpu] }] } } }
+  backend:
+    build: ./backend
+    env_file: ./backend/.env
+    environment:
+      OLLAMA_URL: http://ollama:11434
+      STORAGE_DIR: /data
+    volumes: ["storage:/data"]
+    ports: ["127.0.0.1:8000:8000"]
+    depends_on: [ollama]
+volumes: { ollama: {}, storage: {} }
+# Pull the model once:  docker compose exec ollama ollama pull qwen2.5:7b-instruct
+# The container image installs only the base requirements (placeholder graphics, TTS_BACKEND=none by default
+# unless you extend the Dockerfile with requirements-ai.txt).

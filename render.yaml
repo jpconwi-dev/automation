@@ -1,0 +1,45 @@
+# Render Blueprint: New + > Blueprint > pick this repo. Fill the "sync: false" secrets when asked.
+services:
+  - type: web
+    name: explainer-api
+    runtime: docker
+    dockerfilePath: ./backend/Dockerfile
+    dockerContext: ./backend
+    plan: free            # 512 MB / 0.1 CPU. See DEPLOY.md: renders are slow and may run out of memory. "standard" is the safe size.
+    healthCheckPath: /api/health
+    autoDeploy: true
+    envVars:
+      - key: CORS_ORIGINS          # your Vercel URL, e.g. https://explainer.vercel.app (comma separate several)
+        sync: false
+      - key: ACCESS_KEY            # password the web page asks for; makes the public API private
+        sync: false
+      - key: LLM_BACKEND
+        value: api
+      - key: LLM_API_KEY           # free key from console.groq.com
+        sync: false
+      - key: LLM_MODEL
+        value: llama-3.3-70b-versatile
+      - key: LLM_FALLBACK_MODELS
+        value: qwen/qwen3-32b
+      - key: CLOUDFLARE_ACCOUNT_ID
+        sync: false
+      - key: CLOUDFLARE_API_TOKEN
+        sync: false
+      - key: IMAGE_BACKEND
+        value: cloudflare
+      - key: TTS_BACKEND
+        value: cloudflare
+      - key: VIDEO_BACKEND         # none | hf_space | hf_inference
+        value: none
+      - key: HF_TOKEN              # optional, only for VIDEO_BACKEND
+        sync: false
+      - key: FFMPEG_THREADS
+        value: "1"
+      - key: KEN_BURNS
+        value: "true"
+      - key: MAX_CONCURRENT_JOBS
+        value: "1"
+      - key: MAX_QUEUE
+        value: "1"
+      - key: STORAGE_LIMIT_MB
+        value: "400"
