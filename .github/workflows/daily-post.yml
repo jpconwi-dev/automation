@@ -2,7 +2,7 @@ name: Daily Facebook post
 
 on:
   schedule:
-    - cron: "0 1 * * *"      # UTC. 01:00 UTC = 9:00 AM in UTC+8. Change as you like.
+    - cron: "0 1 * * *"      # UTC. 01:00 UTC = 9:00 AM in UTC+8 (Philippines). Change as you like.
   workflow_dispatch:           # lets you run it by hand from the Actions tab
     inputs:
       dry_run:
@@ -12,22 +12,59 @@ on:
 jobs:
   post:
     runs-on: ubuntu-latest
-    timeout-minutes: 100
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: pip install httpx
-      - run: python scripts/daily_post.py
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+
+      - name: Install FFmpeg and dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ffmpeg fonts-dejavu-core
+          pip install -r backend/requirements.txt
+
+      - name: Start backend on the runner and post
         env:
-          API_URL: ${{ secrets.API_URL }}
+          # ---- backend settings (same values as render.yaml) ----
           ACCESS_KEY: ${{ secrets.ACCESS_KEY }}
+          LLM_BACKEND: api
+          LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
+          LLM_MODEL: llama-3.3-70b-versatile
+          LLM_FALLBACK_MODELS: qwen/qwen3-32b
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          IMAGE_BACKEND: cloudflare
+          TTS_BACKEND: cloudflare
+          VIDEO_BACKEND: none
+          FFMPEG_THREADS: "2"
+          KEN_BURNS: "true"
+          MAX_CONCURRENT_JOBS: "1"
+          MAX_QUEUE: "1"
+          STORAGE_LIMIT_MB: "2000"
+          # ---- posting settings ----
+          API_URL: http://127.0.0.1:8000        # the backend runs on this same runner
           FB_PAGE_ID: ${{ secrets.FB_PAGE_ID }}
           FB_PAGE_TOKEN: ${{ secrets.FB_PAGE_TOKEN }}
-          LLM_API_KEY: ${{ secrets.LLM_API_KEY }}      # same Groq key; optional
-          NICHE: ${{ vars.NICHE }}                      # e.g. personal finance tips for beginners
+          NICHE: ${{ vars.NICHE }}
           AUDIENCE: ${{ vars.AUDIENCE }}
-          FB_MODE: reel                                 # reel | video
-          FB_STATE: PUBLISHED                           # use DRAFT for your first real test
+          FB_MODE: reel                          # reel | video
+          FB_STATE: DRAFT                        # DRAFT for the first real test; change to PUBLISHED when it looks right
           DRY_RUN: ${{ github.event.inputs.dry_run }}
+        run: |
+          cd backend
+          nohup python -m uvicorn app.main:app --host 127.0.0.1 --port 8000 > ../backend.log 2>&1 &
+          cd ..
+          for i in $(seq 1 30); do
+            curl -fs http://127.0.0.1:8000/api/health > /dev/null && break
+            sleep 2
+          done
+          python scripts/daily_post.py
+
+      - name: Backend log (only when something failed)
+        if: failure()
+        run: tail -n 100 backend.log
