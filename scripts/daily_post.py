@@ -5,9 +5,11 @@ Runs in one pass (Render free wipes files on sleep, so generate + upload must ha
 Env vars: see .github/workflows/daily-post.yml
 """
 import datetime as dt
+import difflib
 import json
 import os
 import pathlib
+import re
 import sys
 import time
 
@@ -29,6 +31,7 @@ DURATION = int(os.environ.get("DURATION", "60"))
 GRAPH = "https://graph.facebook.com/v25.0"
 RUPLOAD = "https://rupload.facebook.com/video-upload/v25.0"
 H = {"X-Access-Key": KEY}
+HISTORY = pathlib.Path(os.environ.get("HISTORY_FILE", "data/posted.json"))  # every topic already posted
 
 
 def log(*a):
@@ -41,36 +44,95 @@ def ok(r: httpx.Response, what: str) -> dict:
     return r.json()
 
 
+# ---------- 0. memory of what was already posted (so nothing repeats) ----------
+STOP = {"the", "a", "an", "of", "to", "in", "on", "for", "and", "or", "is", "are", "how", "why", "what", "can",
+        "does", "do", "with", "your", "you", "it", "its", "that", "this", "from", "by", "at", "as"}
+
+
+def load_history() -> list[dict]:
+    try:
+        return json.loads(HISTORY.read_text(encoding="utf-8")).get("posts", [])
+    except (OSError, ValueError):
+        return []
+
+
+def save_history(posts: list[dict]) -> None:
+    HISTORY.parent.mkdir(parents=True, exist_ok=True)
+    HISTORY.write_text(json.dumps({"posts": posts}, indent=2, ensure_ascii=False), encoding="utf-8")
+
+
+def _words(s: str) -> set[str]:
+    return {w for w in re.findall(r"[a-z0-9]+", s.lower()) if w not in STOP}
+
+
+def too_similar(a: str, b: str) -> bool:
+    wa, wb = _words(a), _words(b)
+    if not wa or not wb:
+        return False
+    if wa == wb:
+        return True
+    jaccard = len(wa & wb) / len(wa | wb)
+    ratio = difflib.SequenceMatcher(None, " ".join(sorted(wa)), " ".join(sorted(wb))).ratio()
+    return jaccard >= 0.6 or ratio >= 0.85
+
+
+def already_covered(candidate: str, history: list[dict]) -> bool:
+    for p in history:
+        for old in (p.get("topic", ""), p.get("title", "")):
+            if old and too_similar(candidate, old):
+                return True
+    return False
+
+
 # ---------- 1. topic (the automatic content idea) ----------
-def pick_topic() -> dict:
+def pick_topic(history: list[dict]) -> dict:
     today = dt.date.today()
     if NICHE and LLM_KEY:
-        try:
-            r = httpx.post(
-                f"{LLM_URL}/chat/completions",
-                headers={"Authorization": f"Bearer {LLM_KEY}"},
-                timeout=60,
-                json={
-                    "model": LLM_MODEL,
-                    "temperature": 1.0,
-                    "response_format": {"type": "json_object"},
-                    "messages": [
-                        {"role": "system", "content": "You plan short educational social videos. Reply with JSON only."},
-                        {"role": "user", "content": (
-                            f"Niche: {NICHE}. Today is {today:%A %d %B %Y}. "
-                            "Give ONE specific, surprising, factual video topic for today that is not generic. "
-                            'JSON: {"topic": "...", "audience": "...", "hashtags": ["#a","#b","#c"]}')},
-                    ],
-                },
-            )
-            t = json.loads(r.json()["choices"][0]["message"]["content"])
-            if len(t.get("topic", "")) >= 3:
+        covered = [x for p in history[-80:] for x in (p.get("topic", ""), p.get("title", "")) if x]
+        for attempt in range(5):  # ask again if the idea is a repeat
+            try:
+                avoid = "; ".join(dict.fromkeys(covered))[:3000] or "(nothing yet)"
+                r = httpx.post(
+                    f"{LLM_URL}/chat/completions",
+                    headers={"Authorization": f"Bearer {LLM_KEY}"},
+                    timeout=60,
+                    json={
+                        "model": LLM_MODEL,
+                        "temperature": 1.0,
+                        "response_format": {"type": "json_object"},
+                        "messages": [
+                            {"role": "system", "content": "You plan short educational social videos. Reply with JSON only."},
+                            {"role": "user", "content": (
+                                f"Niche: {NICHE}. Today is {today:%A %d %B %Y}. "
+                                "Give ONE specific, surprising, factual video topic for today that is not generic. "
+                                f"Already covered, so never repeat or closely overlap with these: {avoid}. "
+                                'JSON: {"topic": "...", "audience": "...", "hashtags": ["#a","#b","#c"]}')},
+                        ],
+                    },
+                )
+                data = r.json()
+                if "choices" not in data:
+                    log(f"LLM topic error ({r.status_code}):", r.text[:300])
+                    break
+                t = json.loads(data["choices"][0]["message"]["content"])
+                topic = t.get("topic", "").strip()
+                if len(topic) < 3:
+                    continue
+                if already_covered(topic, history):
+                    log("topic is a repeat, asking again:", topic)
+                    covered.append(topic)
+                    continue
+                t["topic"] = topic
                 t["audience"] = t.get("audience") or AUDIENCE
                 return t
-        except Exception as e:  # fall back to the list
-            log("LLM topic failed, using topics.txt:", e)
+            except Exception as e:  # fall back to the list
+                log("LLM topic failed:", e)
+                break
     lines = [l.strip() for l in pathlib.Path("scripts/topics.txt").read_text().splitlines() if l.strip() and not l.startswith("#")]
-    return {"topic": lines[today.toordinal() % len(lines)], "audience": AUDIENCE, "hashtags": []}
+    fresh = [l for l in lines if not already_covered(l, history)]
+    if not fresh:
+        sys.exit("No unused topics left (the AI topic step failed and topics.txt is used up). Add new lines to scripts/topics.txt. Nothing was posted.")
+    return {"topic": fresh[today.toordinal() % len(fresh)], "audience": AUDIENCE, "hashtags": []}
 
 
 # ---------- 2. make the video on your Render backend ----------
@@ -123,7 +185,7 @@ def make_video(t: dict) -> tuple[pathlib.Path, dict]:
 
 
 # ---------- 3. publish to the Facebook Page ----------
-def post_reel(path: pathlib.Path, caption: str):
+def post_reel(path: pathlib.Path, caption: str, record):
     start = ok(httpx.post(f"{GRAPH}/{PAGE_ID}/video_reels",
                           data={"upload_phase": "start", "access_token": PAGE_TOKEN}, timeout=60), "reel start")
     vid = start["video_id"]
@@ -134,6 +196,7 @@ def post_reel(path: pathlib.Path, caption: str):
         "upload_phase": "finish", "video_id": vid, "video_state": FB_STATE,
         "description": caption, "access_token": PAGE_TOKEN}), "reel publish")
     log("reel finish:", fin)
+    record(vid)  # remembered immediately, even if the status check below fails
     for _ in range(30):  # wait for Facebook to process it
         s = ok(httpx.get(f"{GRAPH}/{vid}", params={"fields": "status", "access_token": PAGE_TOKEN}, timeout=60), "status")
         log("fb status:", s.get("status"))
@@ -143,16 +206,20 @@ def post_reel(path: pathlib.Path, caption: str):
         time.sleep(10)
 
 
-def post_video(path: pathlib.Path, title: str, caption: str):
+def post_video(path: pathlib.Path, title: str, caption: str, record):
     with path.open("rb") as f:
         r = httpx.post(f"{GRAPH}/{PAGE_ID}/videos", timeout=900, files={"source": f}, data={
             "title": title[:100], "description": caption, "published": "true" if FB_STATE == "PUBLISHED" else "false",
             "access_token": PAGE_TOKEN})
-    log("video posted:", ok(r, "video post"))
+    res = ok(r, "video post")
+    log("video posted:", res)
+    record(res.get("id", ""))
 
 
 def main():
-    t = pick_topic()
+    history = load_history()
+    log(f"{len(history)} earlier posts on record")
+    t = pick_topic(history)
     wake_backend()
     path, proj = make_video(t)
     s = proj.get("script") or {}
@@ -163,7 +230,20 @@ def main():
     if DRY_RUN:
         log("DRY_RUN on: not posting")
         return
-    (post_reel if FB_MODE == "reel" else lambda p, c: post_video(p, title, c))(path, caption)
+    history = load_history()  # last check right before posting, in case another run finished meanwhile
+    if already_covered(t["topic"], history) or already_covered(title, history):
+        sys.exit("This topic was already posted. Skipping so nothing repeats.")
+
+    def record(video_id: str):
+        save_history(load_history() + [{
+            "topic": t["topic"], "title": title, "video_id": video_id, "state": FB_STATE,
+            "mode": FB_MODE, "at": dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds")}])
+        log("recorded in", HISTORY)
+
+    if FB_MODE == "reel":
+        post_reel(path, caption, record)
+    else:
+        post_video(path, title, caption, record)
     log("done")
 
 
