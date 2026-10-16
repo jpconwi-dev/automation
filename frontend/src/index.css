@@ -1,0 +1,14 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+html, body { background: #0e0e11; color: #ececf1; }
+body {
+  font-family: "Instrument Sans", ui-sans-serif, system-ui, sans-serif;
+  background-image:
+    radial-gradient(60rem 30rem at 85% -10%, rgba(217, 70, 239, 0.14), transparent 60%),
+    radial-gradient(50rem 30rem at -10% 110%, rgba(139, 92, 246, 0.12), transparent 60%);
+  background-attachment: fixed;
+}
+:focus-visible { outline: 2px solid #ff4d9d; outline-offset: 2px; }
+@media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
