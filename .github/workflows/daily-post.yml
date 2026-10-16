@@ -1,0 +1,33 @@
+name: Daily Facebook post
+
+on:
+  schedule:
+    - cron: "0 1 * * *"      # UTC. 01:00 UTC = 9:00 AM in UTC+8. Change as you like.
+  workflow_dispatch:           # lets you run it by hand from the Actions tab
+    inputs:
+      dry_run:
+        description: "Make the video but do not post"
+        default: "false"
+
+jobs:
+  post:
+    runs-on: ubuntu-latest
+    timeout-minutes: 100
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install httpx
+      - run: python scripts/daily_post.py
+        env:
+          API_URL: ${{ secrets.API_URL }}
+          ACCESS_KEY: ${{ secrets.ACCESS_KEY }}
+          FB_PAGE_ID: ${{ secrets.FB_PAGE_ID }}
+          FB_PAGE_TOKEN: ${{ secrets.FB_PAGE_TOKEN }}
+          LLM_API_KEY: ${{ secrets.LLM_API_KEY }}      # same Groq key; optional
+          NICHE: ${{ vars.NICHE }}                      # e.g. personal finance tips for beginners
+          AUDIENCE: ${{ vars.AUDIENCE }}
+          FB_MODE: reel                                 # reel | video
+          FB_STATE: PUBLISHED                           # use DRAFT for your first real test
+          DRY_RUN: ${{ github.event.inputs.dry_run }}

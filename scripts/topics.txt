@@ -1,0 +1,7 @@
+# Fallback topics, one per line. Used when NICHE / LLM_API_KEY are not set (rotates by date).
+How compound interest quietly builds wealth
+Why the sky is blue and sunsets are red
+How vaccines train your immune system
+What actually happens inside a black hole
+How a bill becomes a law
+Why sleep matters more than you think
