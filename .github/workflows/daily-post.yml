@@ -34,8 +34,8 @@ jobs:
           ACCESS_KEY: ${{ secrets.ACCESS_KEY }}
           LLM_BACKEND: api
           LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
-          LLM_MODEL: llama-3.3-70b-versatile
-          LLM_FALLBACK_MODELS: qwen/qwen3-32b
+          LLM_MODEL: openai/gpt-oss-120b
+          LLM_FALLBACK_MODELS: openai/gpt-oss-20b,llama-3.1-8b-instant
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           IMAGE_BACKEND: cloudflare
