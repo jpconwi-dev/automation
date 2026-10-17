@@ -121,36 +121,12 @@ jobs:
           if-no-files-found: ignore
           retention-days: 3
 
-      - name: Send me a Telegram message with the result
+      - name: Send me a detailed Telegram report
         if: always()
         env:
-          TG_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TG_CHAT: ${{ secrets.TELEGRAM_CHAT_ID }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           OUTCOME: ${{ steps.post.outcome }}
-          DRY: ${{ github.event.inputs.dry_run }}
+          FB_PAGE_ID: ${{ secrets.FB_PAGE_ID }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-        run: |
-          if [ -z "$TG_TOKEN" ] || [ -z "$TG_CHAT" ]; then echo "Telegram secrets not set, skipping message."; exit 0; fi
-          LOG=run.log; [ -f "$LOG" ] || : > "$LOG"
-          NL=$'\n'
-          TOPIC=$(grep -m1 "topic:" "$LOG" | sed -E 's/^[0-9:]+ topic: //' | cut -c1-150 || true)
-          LAST=$(grep -E "job failed|failed|Not posting|rejected|timed out|No unused|already posted|never woke" "$LOG" | tail -n1 | sed -E 's/^[0-9:]+ //; s/[A-Za-z0-9_-]{40,}/[hidden]/g' | cut -c1-300 || true)
-          if [ "$OUTCOME" = "success" ] && [ "$DRY" = "true" ]; then
-            MSG="🧪 Test run finished (dry run). The video was made but NOT posted."
-          elif [ "$OUTCOME" = "success" ] && grep -q "video posted:" "$LOG"; then
-            MSG="✅ Video posted to your Facebook Page."
-          elif grep -qiE "Cloudflare Workers AI allowance|daily free allocation" "$LOG"; then
-            MSG="⚠️ NOT posted: the free Cloudflare limit for today was reached. It resets at 8:00 AM (Philippines)."
-          elif grep -qiE "rate limit" "$LOG"; then
-            MSG="⚠️ NOT posted: a service rate limit was reached. The next run will try again.${NL}Reason: $LAST"
-          elif grep -qi "no matching footage" "$LOG"; then
-            MSG="⚠️ NOT posted: no matching footage was found for every scene. The topic was not used up."
-          elif [ "$OUTCOME" = "success" ]; then
-            MSG="ℹ️ The run finished but I could not confirm a post. Please check the run."
-          else
-            MSG="❌ Video failed to post.${NL}Reason: ${LAST:-the run stopped before posting}"
-          fi
-          [ -n "$TOPIC" ] && MSG="$MSG${NL}Topic: $TOPIC"
-          MSG="$MSG${NL}${NL}Run details: $RUN_URL"
-          curl -s -o /dev/null -w "telegram status: %{http_code}\n" "https://api.telegram.org/bot${TG_TOKEN}/sendMessage" \
-            --data-urlencode "chat_id=${TG_CHAT}" --data-urlencode "text=$MSG"
+        run: python scripts/notify.py

@@ -45,6 +45,20 @@ def log(*a):
     print(time.strftime("%H:%M:%S"), *a, flush=True)
 
 
+# Details of this run, written to result.json at the end so notify.py can send a full report.
+RESULT_FILE = pathlib.Path(os.environ.get("RESULT_FILE", "result.json"))
+R: dict = {"started_at": dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds"), "stage": "starting",
+           "dry_run": False, "fb_state": os.environ.get("FB_STATE", "PUBLISHED")}
+
+
+def save_result() -> None:
+    R["finished_at"] = dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds")
+    try:
+        RESULT_FILE.write_text(json.dumps(R, indent=2, ensure_ascii=False), encoding="utf-8")
+    except OSError:
+        pass
+
+
 def ok(r: httpx.Response, what: str) -> dict:
     if r.status_code >= 400:
         sys.exit(f"{what} failed ({r.status_code}): {r.text[:600]}")
@@ -303,6 +317,7 @@ def check_token():
         sys.exit(f"FB_PAGE_TOKEN was rejected by Facebook ({r.status_code}): {r.text[:200]}")
     me = r.json()
     log(f"token belongs to: {me.get('name')} (id {me.get('id')}) | FB_PAGE_ID is {PAGE_ID}")
+    R["page_name"] = me.get("name") or ""
     if str(me.get("id")) != str(PAGE_ID).strip():
         sys.exit("FB_PAGE_TOKEN is not the Page token for FB_PAGE_ID. If the name above is a person, you saved a "
                  "USER token. Get the Page token from me/accounts and update the FB_PAGE_TOKEN secret. Nothing was posted.")
@@ -324,6 +339,7 @@ def post_reel(path: pathlib.Path, caption: str, record):
     for _ in range(30):  # wait for Facebook to process it
         s = ok(httpx.get(f"{GRAPH}/{vid}", params={"fields": "status", "access_token": PAGE_TOKEN}, timeout=60), "status")
         log("fb status:", s.get("status"))
+        R["fb_status"] = json.dumps(s.get("status", {}), ensure_ascii=False)[:400]
         st = json.dumps(s.get("status", {}))
         if '"ready"' in st or '"published"' in st or "error" in st:
             break
@@ -345,17 +361,27 @@ def pick_duration() -> int:
 
 
 def main():
+    R["dry_run"] = DRY_RUN
+    R["stage"] = "checking the Facebook token"
     if not DRY_RUN:
         check_token()  # fail fast, before spending minutes on a video
+    R["stage"] = "choosing a topic"
     history = load_history()
     log(f"{len(history)} earlier posts on record")
+    R["earlier_posts"] = len(history)
     t = pick_topic(history)
     duration = pick_duration()
     as_reel = FB_MODE in ("reel", "auto") and duration <= 90  # Facebook Reels must be 3 to 90 seconds
     log(f"topic: {t['topic']} | subject: {t.get('subject') or '-'} | {duration}s | {'reel' if as_reel else 'normal video'}")
+    R.update(topic=t["topic"], subject=t.get("subject", ""), duration_s=duration, format="Reel" if as_reel else "Normal video")
+    R["stage"] = "making the video (voice, footage, music)"
     wake_backend()
+    t0 = time.time()
     path, proj = make_video(t, duration)
+    R["render_seconds"] = round(time.time() - t0)
+    R["video_mb"] = round(path.stat().st_size / 1048576, 1)
     meta = proj.get("assets_meta") or {}
+    R["scenes"] = [{"scene": k, "footage": str(v.get("tags") or v.get("note") or "-")[:90]} for k, v in sorted(meta.items())]
     for k, v in sorted(meta.items()):  # shows what footage each scene got, so you can check it matches the subject
         log(f"  {k}: {v.get('tags') or v.get('note') or '-'}")
     gaps = [k for k, v in meta.items() if "placeholder" in json.dumps(v).lower()]
@@ -364,8 +390,10 @@ def main():
                  "Not posting this one; the topic is not used up, so the next run picks again.")
     if gaps:
         log(f"WARNING: {len(gaps)} scene(s) have no matching footage (a real run would not post this video)")
+    R["stage"] = "writing the title, caption and hashtags"
     title, caption = build_caption(t, proj)
     log("caption:\n" + caption)
+    R.update(title=title, caption=caption, hashtags=re.findall(r"#\w+", caption.splitlines()[-1] if caption else ""))
     if DRY_RUN:
         log("DRY_RUN on: not posting")
         return
@@ -374,18 +402,36 @@ def main():
         sys.exit("This topic was already posted. Skipping so nothing repeats.")
 
     def record(video_id: str):
+        R["video_id"] = video_id
+        R["posted_at"] = dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds")
         save_history(load_history() + [{
             "topic": t["topic"], "subject": t.get("subject", ""), "title": title, "video_id": video_id,
             "state": FB_STATE, "mode": "reel" if as_reel else "video", "seconds": duration,
             "at": dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds")}])
         log("recorded in", HISTORY)
 
+    R["stage"] = "uploading to Facebook"
+    t1 = time.time()
     if as_reel:
         post_reel(path, caption, record)
     else:
         post_video(path, title, caption, record)
+    R["upload_seconds"] = round(time.time() - t1)
+    R["stage"] = "done"
     log("done")
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+        if R.get("stage") != "done" and R.get("dry_run"):
+            R["stage"] = "done"
+    except SystemExit as e:  # sys.exit("message") is how this script reports a failure
+        if e.code not in (None, 0):
+            R["error"] = str(e.code)[:1500]
+        raise
+    except Exception as e:
+        R["error"] = f"{type(e).__name__}: {e}"[:1500]
+        raise
+    finally:
+        save_result()
