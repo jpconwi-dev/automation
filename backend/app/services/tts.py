@@ -1,6 +1,8 @@
 import importlib.util
 import os
+import re
 import subprocess
+import sys
 import wave
 from pathlib import Path
 
@@ -17,6 +19,7 @@ WIN_CULTURE = {"en-us": ("en-US", "en"), "en-gb": ("en-GB", "en"), "es": ("es-ES
                "hi": ("hi-IN", "hi"), "it": ("it-IT", "it"), "ja": ("ja-JP", "ja"), "pt-br": ("pt-BR", "pt"),
                "zh": ("zh-CN", "zh")}
 _pipes: dict = {}
+_cf_down = False  # set once the free Cloudflare allowance runs out
 
 SAPI_SCRIPT = r"""
 $ErrorActionPreference = "Stop"
@@ -53,8 +56,35 @@ def synthesize(text: str, language: str, out_path, voice: str = "auto", speed: f
     if settings.tts_backend == "windows":
         return _synth_windows(text, language, out_path, voice, speed)
     if settings.tts_backend == "cloudflare":
-        return _synth_cloudflare(text, language, out_path, speed)
+        global _cf_down
+        if not _cf_down:
+            try:
+                return _synth_cloudflare(text, language, out_path, speed)
+            except PipelineError as e:
+                if settings.tts_fallback != "kokoro" or not re.search(r"allowance for today|daily free allocation|neurons", str(e), re.I):
+                    raise
+                _cf_down = True  # skip Cloudflare for the rest of this video
+                print("Cloudflare voice allowance is used up: switching to the backup voice (Kokoro).", flush=True)
+        _ensure_kokoro()
     return _synth_kokoro(text, language, out_path, voice, speed)
+
+
+def _ensure_kokoro() -> None:
+    """Install the backup voice the first time it is needed (only when TTS_FALLBACK_INSTALL is on, i.e. on the GitHub runner)."""
+    if importlib.util.find_spec("kokoro") is not None or not settings.tts_fallback_install:
+        return
+    print("Installing the backup voice (Kokoro). This takes a few minutes.", flush=True)
+    steps = [["sudo", "apt-get", "install", "-y", "-qq", "espeak-ng"],
+             [sys.executable, "-m", "pip", "install", "-q", "torch", "--index-url", "https://download.pytorch.org/whl/cpu"],
+             [sys.executable, "-m", "pip", "install", "-q", "kokoro>=0.9.2", "soundfile"]]
+    for cmd in steps:
+        try:
+            r = subprocess.run(cmd, capture_output=True, text=True, timeout=1500)
+        except (OSError, subprocess.SubprocessError) as e:
+            raise PipelineError(f"Couldn't install the backup voice: {e}")
+        if r.returncode != 0:
+            raise PipelineError(f"Couldn't install the backup voice ({cmd[0]} failed): {r.stderr[-300:]}")
+    importlib.invalidate_caches()
 
 
 def _synth_cloudflare(text: str, language: str, out_path, speed: float = 1.0) -> float:

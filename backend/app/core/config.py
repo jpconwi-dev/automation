@@ -42,6 +42,9 @@ class Settings(BaseSettings):
     cloudflare_image_model: str = "@cf/black-forest-labs/flux-1-schnell"  # FLUX.1 [schnell], Apache-2.0 weights
     cloudflare_tts_model: str = "@cf/myshell-ai/melotts"  # MeloTTS, MIT
     cloudflare_steps: int = 4
+    # When the free Cloudflare voice allowance is used up, narrate with Kokoro instead ("kokoro" or "none").
+    tts_fallback: str = "kokoro"
+    tts_fallback_install: bool = False  # True lets the app install Kokoro itself the first time it is needed (GitHub runner)
     cloudflare_timeout: int = 120
 
     # Optional AI text-to-video for a few scenes (the rest stay images with motion). No free text-to-video API exists:

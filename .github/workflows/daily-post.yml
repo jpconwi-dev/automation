@@ -71,6 +71,8 @@ jobs:
           IMAGE_BACKEND: pixabay                 # real moving stock footage (free key from pixabay.com/api/docs)
           PIXABAY_API_KEY: ${{ secrets.PIXABAY_API_KEY }}
           TTS_BACKEND: cloudflare
+          TTS_FALLBACK: kokoro                   # if the free Cloudflare voice allowance runs out, narrate with Kokoro instead
+          TTS_FALLBACK_INSTALL: "true"            # lets the run install Kokoro by itself, only on days it is needed
           VIDEO_BACKEND: none
           FFMPEG_THREADS: "2"
           KEN_BURNS: "true"
