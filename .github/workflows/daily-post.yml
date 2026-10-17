@@ -2,7 +2,7 @@ name: Daily Facebook post
 
 on:
   schedule:
-    - cron: "0 1 * * *"      # UTC. 01:00 UTC = 9:00 AM in UTC+8 (Philippines). Change as you like.
+     - cron: "0 1,6 * * *"      # 9:00 AM and 2:00 PM Philippine time (UTC+8)
   workflow_dispatch:           # lets you run it by hand from the Actions tab
     inputs:
       dry_run:
@@ -60,7 +60,7 @@ jobs:
           NICHE: ${{ vars.NICHE }}
           AUDIENCE: ${{ vars.AUDIENCE }}
           FB_MODE: reel                          # reel | video
-          FB_STATE: DRAFT                        # DRAFT for the first real test; change to PUBLISHED when it looks right
+          FB_STATE: PUBLISHED                        # DRAFT for the first real test; change to PUBLISHED when it looks right
           DRY_RUN: ${{ github.event.inputs.dry_run }}
         run: |
           cd backend
