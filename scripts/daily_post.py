@@ -140,9 +140,16 @@ def llm_json(system: str, user: str, temperature: float = 0.7) -> dict | None:
         return None
 
 
+# Words stock-video tags almost never contain. Keeping them would make the footage search find nothing.
+FILLER = {"immortal", "ultra", "ultra-fast", "fast", "amazing", "incredible", "mysterious", "ancient", "legendary",
+          "deadly", "famous", "tiny", "huge", "rare", "strange", "unique", "powerful", "mighty", "secret", "hidden"}
+
+
 def clean_subject(s: str) -> str:
     s = re.sub(r"[^A-Za-z0-9 '\-]", " ", s or "")
-    return " ".join(s.split()[:3]).strip().lower()
+    words = s.lower().split()[:3]
+    kept = [w for w in words if w not in FILLER]
+    return " ".join(kept or words).strip()
 
 
 def derive_subject(topic: str) -> str:
@@ -150,7 +157,9 @@ def derive_subject(topic: str) -> str:
     d = llm_json("You pick stock-video search terms. Reply with JSON only.",
                  f'Topic: "{topic}". What is the ONE main visible subject that footage must show? Reply 1 to 3 simple, '
                  'common English words a stock-video site would tag, e.g. "black bear", "volcano", "honey bee". '
-                 'Keep every adjective that matters (black bear, not bear). If the topic has no single visible subject, '
+                 'Keep an adjective only if dropping it could show a different animal or thing (black bear, polar bear, red panda). '
+                 'Drop adjectives stock sites never tag, such as immortal, giant, tiny, ancient, ultra-fast (immortal jellyfish -> jellyfish). '
+                 'If the topic has no single visible subject, '
                  'reply an empty string. JSON: {"subject": "..."}', 0.2)
     return clean_subject((d or {}).get("subject", ""))
 
@@ -233,8 +242,10 @@ def pick_topic(history: list[dict]) -> dict:
                                 "Pick a surprising angle that makes people curious, such as a record, a myth, or a 'how is this even possible' fact. "
                                 f"Already covered, so never repeat or closely overlap with these: {avoid}. "
                                 'JSON: {"topic": "...", "subject": "...", "audience": "...", "hashtags": ["a","b","c"]}. '
-                                '"subject" is the ONE main visible thing, 1 to 3 simple common words, keeping adjectives that matter '
-                                '(e.g. "black bear", "volcano", "honey bee").')},
+                                '"subject" is the ONE main visible thing, 1 to 3 simple common words as a stock-video site would tag it. '
+                                'Keep an adjective only if dropping it could show a different animal or thing (e.g. "black bear", "polar bear", "red panda"). '
+                                'Drop adjectives stock sites never tag, such as immortal, giant, tiny, ancient, ultra-fast '
+                                '(e.g. "jellyfish", not "immortal jellyfish"; "volcano", "honey bee").')},
                         ],
                     },
                 )
