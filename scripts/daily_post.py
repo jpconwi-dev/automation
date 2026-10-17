@@ -320,6 +320,18 @@ def wake_backend():
     sys.exit("backend never woke up")
 
 
+def scenes_meta(assets: list[dict]) -> dict:
+    """Which footage each scene got, from the backend's /assets list (scene_01.png -> {source, note, ...}).
+    The project record itself does not carry this, which is why it must be read from /assets."""
+    return {a["name"]: a for a in assets if re.fullmatch(r"scene_\d{2}\.png", a.get("name", ""))}
+
+
+def footage_gaps(meta: dict) -> list[str]:
+    """Scenes that are NOT real footage. A scene is real only when a stock source or an AI video supplied it;
+    anything else is a placeholder graphic, whichever backend made it. An empty list of scenes is never OK."""
+    return sorted(k for k, v in meta.items() if not v.get("source") and not v.get("ai_generated"))
+
+
 def make_video(t: dict, duration: int) -> tuple[pathlib.Path, dict]:
     body = {
         "mode": "explainer", "topic": t["topic"][:500], "audience": t["audience"][:200],
@@ -344,6 +356,8 @@ def make_video(t: dict, duration: int) -> tuple[pathlib.Path, dict]:
     else:
         sys.exit("timed out waiting for render")
     proj = ok(httpx.get(f"{API}/api/projects/{pid}", headers=H, timeout=60), "get project")
+    assets = ok(httpx.get(f"{API}/api/projects/{pid}/assets", headers=H, timeout=60), "get footage list")
+    proj["assets_meta"] = scenes_meta(assets.get("assets") or [])
     out = pathlib.Path("video.mp4")
     with httpx.stream("GET", f"{API}/api/projects/{pid}/video", headers=H, timeout=300) as r:
         if r.status_code >= 400:
@@ -442,7 +456,9 @@ def main():
         log(f"  {k}: {v.get('tags') or v.get('note') or '-'}")
     # A scene is real footage only when a stock source supplied it (or AI made it). Anything else is a placeholder
     # graphic, whichever backend produced it, and a video with one must never be posted.
-    gaps = [k for k, v in meta.items() if not v.get("source") and not v.get("ai_generated")]
+    if not meta:  # never post a video whose footage could not be checked
+        sys.exit("Could not read which footage each scene used, so the video was not posted (the topic is not used up).")
+    gaps = footage_gaps(meta)
     if gaps:
         for k in sorted(gaps):
             log(f"  NO FOOTAGE {k}: {meta[k].get('note')}")  # says which sources were searched and what each returned

@@ -425,3 +425,20 @@ def test_no_footage_explains_why(monkeypatch):
     msg = stock.last_diag
     assert "nasa 0 clips" in msg and "wikimedia ERROR" in msg and "403" in msg and "pixabay ERROR: no API key" in msg
     assert "archive 1 clips" in msg and "none was tagged with the subject (mantis shrimp)" in msg
+
+
+def test_real_api_flow_flags_placeholder_scene_for_daily_post():
+    """The project record has no footage info; daily_post must read it from /assets or it can never see a placeholder."""
+    import pathlib
+    src = (pathlib.Path(__file__).parents[2] / "scripts" / "daily_post.py").read_text(encoding="utf-8")
+    ns = {"re": re}
+    for name in ("scenes_meta", "footage_gaps"):
+        a = src.index(f"def {name}"); b = src.index("\ndef ", a + 5)
+        exec(src[a:b], ns)
+    with TestClient(app) as c:
+        p, job, _ = run_job(c, {"topic": "How a bicycle works", "audience": "kids", "duration": 30})
+        assert job["status"] == "completed", job.get("error")
+        assert "assets_meta" not in c.get(f"/api/projects/{p['id']}").json()  # the reason the old guard saw nothing
+        meta = ns["scenes_meta"](c.get(f"/api/projects/{p['id']}/assets").json()["assets"])
+    assert meta and ns["footage_gaps"](meta) == ["scene_03.png"]  # fake_fetch gives scene 3 no footage
+    assert ns["footage_gaps"]({}) == []  # empty is handled separately in main(): it refuses to post
