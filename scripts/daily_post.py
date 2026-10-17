@@ -437,17 +437,18 @@ def main():
     R["render_seconds"] = round(time.time() - t0)
     R["video_mb"] = round(path.stat().st_size / 1048576, 1)
     meta = proj.get("assets_meta") or {}
-    R["scenes"] = [{"scene": k, "footage": str(v.get("tags") or v.get("note") or "-")[:90]} for k, v in sorted(meta.items())]
+    R["scenes"] = [{"scene": k, "footage": str(v.get("tags") or v.get("note") or "-")[:260]} for k, v in sorted(meta.items())]
     for k, v in sorted(meta.items()):  # shows what footage each scene got, so you can check it matches the subject
         log(f"  {k}: {v.get('tags') or v.get('note') or '-'}")
     # A scene is real footage only when a stock source supplied it (or AI made it). Anything else is a placeholder
     # graphic, whichever backend produced it, and a video with one must never be posted.
     gaps = [k for k, v in meta.items() if not v.get("source") and not v.get("ai_generated")]
-    if gaps and not DRY_RUN:
-        sys.exit(f"{len(gaps)} scene(s) found no matching footage and would show a placeholder graphic. "
-                 "Not posting this one; the topic is not used up, so the next run picks again.")
     if gaps:
-        log(f"WARNING: {len(gaps)} scene(s) have no matching footage (a real run would not post this video)")
+        for k in sorted(gaps):
+            log(f"  NO FOOTAGE {k}: {meta[k].get('note')}")  # says which sources were searched and what each returned
+        # Also in a dry run: stops the private YouTube test from uploading a placeholder video.
+        sys.exit(("(dry run) " if DRY_RUN else "") + f"{len(gaps)} scene(s) found no matching footage and would show a "
+                 "placeholder graphic. Not posting this one" + ("." if DRY_RUN else "; the topic is not used up, so the next run picks again."))
     R["stage"] = "writing the title, caption and hashtags"
     title, caption = build_caption(t, proj)
     caption = add_credits(caption, meta)

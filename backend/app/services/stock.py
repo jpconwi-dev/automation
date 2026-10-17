@@ -23,6 +23,8 @@ about after also because before between both each during over under very your yo
 _used: dict[str, set] = {}  # clips already used per project, so scenes don't repeat footage
 _prov_count: dict[str, Counter] = {}  # clips taken per provider in this project; ties go to the least-used source
 log = logging.getLogger("stock")
+_stats: dict[str, dict] = {}  # per provider for the scene being searched: how many clips it returned, or its error
+last_diag = ""  # why the last fetch_clip found nothing; shown in the run log and Telegram report
 UA = "ExplainerVideoBot/1.0 (educational video generator; contact: set STOCK_CONTACT in backend/.env)"
 MAX_DL = 60 * 1024 * 1024
 VIDEO_EXT = (".mp4", ".webm", ".mov", ".m4v")
@@ -32,7 +34,7 @@ def tokens(text: str) -> set[str]:
     out = set()
     for w in "".join(c.lower() if c.isalnum() else " " for c in text).split():
         if len(w) >= 3 and w not in STOP:
-            out.add(w[:-1] if w.endswith("s") and len(w) > 4 else w)
+            out.add(w[:-1] if w.endswith("s") and len(w) > 4 and not w.endswith(("ss", "is", "us")) else w)  # plural s; not mantis, cactus, glass
     return out
 
 
@@ -293,19 +295,31 @@ def _search(query: str, aspect: str) -> list[dict]:
     out = []
     for name in active_providers():
         fn = globals().get("_" + name) if name in PROVIDER_NAMES else None
+        st = _stats.setdefault(name, {"found": 0, "err": None, "ids": set()})
         if fn is None:
             log.warning("unknown stock provider %r in STOCK_PROVIDERS (use: %s)", name, ", ".join(PROVIDER_NAMES))
+            st["err"] = "unknown provider name"
             continue
         if multi and name in _KEYED and not _KEYED[name]():
+            st["err"] = "no API key set"
             continue
         try:
             for v in fn(query, aspect):
                 v.setdefault("provider", name)
                 out.append(v)
+                if v.get("id") not in st["ids"]:  # the same clip shows up in several searches: count it once
+                    st["ids"].add(v.get("id"))
+                    st["found"] += 1
         except PipelineError as e:
+            st["err"] = str(e)[:90]
             if not multi:
                 raise
             log.warning("%s search failed, skipping it: %s", name, e)
+        except Exception as e:  # noqa: BLE001  a changed API response must not stop the video either
+            st["err"] = f"{type(e).__name__}: {e}"[:90]
+            if not multi:
+                raise PipelineError(f"{name} returned something unexpected: {e}")
+            log.warning("%s search crashed, skipping it: %r", name, e)
     return out
 
 
@@ -398,6 +412,18 @@ def _download(link: str, dl, provider: str) -> None:
         raise PipelineError(f"Couldn't download a {provider} clip: {e}")
 
 
+def _diagnose(kept: int, must: set[str] | None, alts: list[set[str]] | None) -> str:
+    """One line: what each source returned and why nothing was used."""
+    parts = []
+    for name, st in _stats.items():
+        parts.append(f"{name} ERROR: {st['err']}" if st["err"] and not st["found"] else f"{name} {st['found']} clips")
+    found = sum(st["found"] for st in _stats.values())
+    if found and not kept:
+        names = ", ".join(" ".join(sorted(m)) for m in [must or set(), *(alts or [])] if m)
+        parts.append(f"{found} clips found but none was tagged with the subject ({names or 'search words'})")
+    return "searched: " + ("; ".join(parts) or "no source is active (check IMAGE_BACKEND / STOCK_PROVIDERS)")
+
+
 def fetch_clip(queries: list[str], aspect: str, index: int, clip_path, thumb_path, context: str = "",
                must: set[str] | None = None, alts: list[set[str]] | None = None) -> dict | None:
     """Download the best-matching unused clip from the active provider(s). Clips whose tags don't relate to the
@@ -413,6 +439,9 @@ def fetch_clip(queries: list[str], aspect: str, index: int, clip_path, thumb_pat
     used = _used.setdefault(pid, set())
     counts = _prov_count.setdefault(pid, Counter())
     ctok = tokens(context)
+    global last_diag
+    _stats.clear()
+    kept = 0
     # With a subject: first look for a clip not used yet, then (before giving up) reuse one that was already used.
     for allow_used in ((False, True) if must else (False,)):
       for q in queries:
@@ -424,6 +453,7 @@ def fetch_clip(queries: list[str], aspect: str, index: int, clip_path, thumb_pat
         ranked = [(sc, v) for sc, v in ranked if sc >= 3]  # at least one search word must appear in the clip's tags
         if must:
             ranked = [(sc, v) for sc, v in ranked if has_subject(v, must, alts)]  # and ALL words of the subject (or of an alias)
+        kept += len(ranked)
         for _, v in ranked[:4]:  # a candidate can fail (dead link, too big): try the next best one
             prov = v.get("provider", settings.image_backend)
             dl = settings.tmp_dir / f"dl_{pid}_{index}.mp4"
@@ -450,4 +480,5 @@ def fetch_clip(queries: list[str], aspect: str, index: int, clip_path, thumb_pat
                 Image.new("RGB", (320, 180), (30, 30, 40)).save(thumb_path)
             return {"ai_generated": False, "source": prov, "query": q, "tags": v.get("tags"), "source_url": v.get("page"),
                     "credit": v.get("credit"), "credit_required": bool(v.get("credit_required")), "license": v.get("license")}
+    last_diag = _diagnose(kept, must, alts)
     return None

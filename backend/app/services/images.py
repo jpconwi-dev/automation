@@ -317,7 +317,7 @@ def make_scene_image(project: dict, script, scene, index: int, pdir: Path) -> di
                                 context=context, must=must, alts=alts)
         if meta is None:  # nothing matched: labeled animated placeholder for this scene only
             _make_layered(project, scene, index, pdir, seed)
-            return {"ai_generated": False, "model": None, "note": "no stock footage found; placeholder used"}
+            return {"ai_generated": False, "model": None, "note": f"no stock footage found; placeholder used. {stock.last_diag}"}
         _text_layer((W, H), scene.on_screen_text, None).save(pdir / f"{n}_text.png")
         return meta
     elif settings.image_backend == "fallback":

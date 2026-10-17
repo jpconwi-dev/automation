@@ -410,3 +410,18 @@ def test_daily_post_guard_and_aliases(monkeypatch):
     meta = {"a": {"source": "nasa"}, "b": {"ai_generated": False, "model": None, "note": "placeholder graphic (IMAGE_BACKEND=fallback)"},
             "c": {"ai_generated": True}}
     assert [k for k, v in meta.items() if not v.get("source") and not v.get("ai_generated")] == ["b"]
+
+
+def test_no_footage_explains_why(monkeypatch):
+    from app.core.errors import PipelineError
+    monkeypatch.setattr(settings, "image_backend", "stock")
+    monkeypatch.setattr(settings, "stock_providers", "nasa,wikimedia,archive,pixabay")
+    monkeypatch.setattr(settings, "pixabay_api_key", None)
+    monkeypatch.setattr(stock, "_nasa", lambda q, a: [])
+    monkeypatch.setattr(stock, "_wikimedia", lambda q, a: (_ for _ in ()).throw(PipelineError("Wikimedia returned 403")))
+    monkeypatch.setattr(stock, "_archive", lambda q, a: [{"id": "a1", "files": [], "thumb": None, "page": "p", "tags": "bicycle"}])
+    d = Path(tempfile.mkdtemp()) / "p2"; d.mkdir()
+    assert _real_fetch(["mantis shrimp"], "9:16", 1, d / "c.mp4", d / "t.png", must=stock.tokens("mantis shrimp")) is None
+    msg = stock.last_diag
+    assert "nasa 0 clips" in msg and "wikimedia ERROR" in msg and "403" in msg and "pixabay ERROR: no API key" in msg
+    assert "archive 1 clips" in msg and "none was tagged with the subject (mantis shrimp)" in msg
