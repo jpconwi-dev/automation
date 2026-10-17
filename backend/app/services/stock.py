@@ -412,6 +412,11 @@ def _download(link: str, dl, provider: str) -> None:
         raise PipelineError(f"Couldn't download a {provider} clip: {e}")
 
 
+def _searched_summary() -> str:
+    """e.g. 'nasa 0, wikimedia 3, pixabay 12, pexels no key' : what each source returned for this scene."""
+    return ", ".join(f"{n} {st['err'][:25] if st['err'] and not st['found'] else st['found']}" for n, st in _stats.items())
+
+
 def _diagnose(kept: int, must: set[str] | None, alts: list[set[str]] | None) -> str:
     """One line: what each source returned and why nothing was used."""
     parts = []
@@ -479,6 +484,7 @@ def fetch_clip(queries: list[str], aspect: str, index: int, clip_path, thumb_pat
             except Exception:  # thumbnail is cosmetic
                 Image.new("RGB", (320, 180), (30, 30, 40)).save(thumb_path)
             return {"ai_generated": False, "source": prov, "query": q, "tags": v.get("tags"), "source_url": v.get("page"),
-                    "credit": v.get("credit"), "credit_required": bool(v.get("credit_required")), "license": v.get("license")}
+                    "credit": v.get("credit"), "credit_required": bool(v.get("credit_required")), "license": v.get("license"),
+                    "searched": _searched_summary()}
     last_diag = _diagnose(kept, must, alts)
     return None

@@ -451,9 +451,16 @@ def main():
     R["render_seconds"] = round(time.time() - t0)
     R["video_mb"] = round(path.stat().st_size / 1048576, 1)
     meta = proj.get("assets_meta") or {}
-    R["scenes"] = [{"scene": k, "footage": str(v.get("tags") or v.get("note") or "-")[:260]} for k, v in sorted(meta.items())]
+    def scene_line(v: dict) -> str:
+        src = v.get("source") or "none"
+        link = f" -> {v['source_url']}" if v.get("source_url") else ""
+        return f"[{src}] {str(v.get('tags') or v.get('note') or '-')[:160]}{link}"
+    R["scenes"] = [{"scene": k, "footage": scene_line(v)[:420], "searched": str(v.get("searched") or "")[:200]}
+                   for k, v in sorted(meta.items())]
     for k, v in sorted(meta.items()):  # shows what footage each scene got, so you can check it matches the subject
-        log(f"  {k}: {v.get('tags') or v.get('note') or '-'}")
+        log(f"  {k}: {scene_line(v)}")
+        if v.get("searched"):
+            log(f"      sources searched: {v['searched']}")
     # A scene is real footage only when a stock source supplied it (or AI made it). Anything else is a placeholder
     # graphic, whichever backend produced it, and a video with one must never be posted.
     if not meta:  # never post a video whose footage could not be checked

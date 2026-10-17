@@ -324,6 +324,8 @@ def add_details(out, r, total, posted, show_fb):
         out.append(f"Footage used ({len(r['scenes'])} scene{'s' if len(r['scenes']) != 1 else ''}):")
         for s in r["scenes"][:12]:
             out.append(f"  {s['scene']}: {s['footage']}")
+            if s.get("searched"):
+                out.append(f"      searched: {s['searched']}")
     tags = r.get("hashtags") or []
     if tags:
         out.append("")

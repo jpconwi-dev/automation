@@ -339,7 +339,7 @@ def make_scene_image(project: dict, script, scene, index: int, pdir: Path) -> di
             diag = stock.last_diag
             ai = _ai_scene_fallback(project, script, scene, size, seed, index, pdir)
             if ai is not None:
-                return {**ai, "note": f"no stock footage matched; AI picture used. {diag}"}
+                return {**ai, "searched": diag.removeprefix("searched: "), "note": f"no stock footage matched; AI picture used. {diag}"}
             _make_layered(project, scene, index, pdir, seed)
             return {"ai_generated": False, "model": None, "note": f"no stock footage found; placeholder used. {diag}"}
         _text_layer((W, H), scene.on_screen_text, None).save(pdir / f"{n}_text.png")
