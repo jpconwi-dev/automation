@@ -7,7 +7,7 @@ from ..core.config import settings
 from ..core.errors import PipelineError
 from ..schemas.schemas import Script  # noqa: E402
 
-SCENE_COUNT = {30: 4, 60: 6, 120: 10, 300: 18}
+SCENE_COUNT = {30: 4, 60: 6, 90: 8, 120: 10, 300: 18}
 LANG_NAMES = {"en-us": "American English", "en-gb": "British English", "es": "Spanish", "fr": "French",
               "hi": "Hindi", "it": "Italian", "ja": "Japanese", "pt-br": "Brazilian Portuguese", "zh": "Mandarin Chinese"}
 STYLE_HINTS = {
@@ -41,7 +41,10 @@ def _messages(p: dict, feedback: str | None) -> list[dict]:
         "visual_description, on_screen_text, subtitle_text, duration_seconds, search_keywords. "
         "search_keywords is 1 to 3 simple, common ENGLISH nouns a stock-video site would have, e.g. 'power plant', 'laboratory scientist', 'city night'. Never abstract words. "
         "visual_description describes only what to draw (no text in the picture). "
-        "on_screen_text is a short caption of at most 8 words. subtitle_text equals the narration."
+        "on_screen_text is a short caption of at most 8 words. subtitle_text equals the narration. "
+        "The hook is ONE spoken sentence of at most 12 words that makes people want to keep watching: a surprising fact, "
+        "a bold 'what if', or a question. Never open with 'Welcome', 'Today', 'In this video' or 'Did you know'. "
+        "Use short, vivid sentences, one idea per scene, and end the last scene with a short memorable line."
     )
     if p.get("mode") == "prompt":
         brief = f"Video brief from the user: {p['prompt']}\n" + (f"Audience: {p['audience']}\n" if p.get("audience") else "")

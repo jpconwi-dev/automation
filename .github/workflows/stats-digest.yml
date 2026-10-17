@@ -1,0 +1,46 @@
+name: Facebook stats digest
+
+# Every 3 hours (UTC) it reads reactions, comments and views of your recent posts and sends a Telegram message
+# when something changed (plus one short message a day). It never posts anything.
+on:
+  schedule:
+    - cron: "20 */3 * * *"
+  workflow_dispatch: {}
+
+permissions:
+  contents: write          # saves the last numbers (data/stats.json) so it can tell what is new
+
+concurrency:
+  group: stats-digest
+  cancel-in-progress: false
+
+jobs:
+  digest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Read the numbers and send the Telegram digest
+        env:
+          FB_PAGE_TOKEN: ${{ secrets.FB_PAGE_TOKEN }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: python scripts/stats_digest.py
+
+      - name: Save the last numbers
+        run: |
+          if [ -n "$(git status --porcelain data/stats.json)" ]; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add data/stats.json
+            git commit -m "Update stats snapshot [skip ci]"
+            for i in 1 2 3; do
+              git pull --rebase && git push && break
+              sleep 5
+            done
+          fi

@@ -28,8 +28,8 @@ LLM_MODEL = os.environ.get("LLM_MODEL", "llama-3.3-70b-versatile")
 FB_MODE = os.environ.get("FB_MODE", "auto")        # auto = Reel when 90s or less, normal video when longer | reel | video
 FB_STATE = os.environ.get("FB_STATE", "PUBLISHED") # set DRAFT to test without going public
 DRY_RUN = os.environ.get("DRY_RUN", "") == "true"  # make the video but do not post
-DURATIONS = [int(x) for x in re.split(r"[,\s]+", os.environ.get("DURATIONS", "30,60,120")) if x in ("30", "60", "120")] or [60]
-DURATION_CHOICE = os.environ.get("DURATION", "").strip()   # "30" | "60" | "120" | "" / "auto" = random from DURATIONS
+DURATIONS = [int(x) for x in re.split(r"[,\s]+", os.environ.get("DURATIONS", "30,60,90")) if x in ("30", "60", "90", "120")] or [60]
+DURATION_CHOICE = os.environ.get("DURATION", "").strip()   # "30" | "60" | "90" | "120" | "" / "auto" = random from DURATIONS
 TOPIC_OVERRIDE = os.environ.get("TOPIC", "").strip()       # type a topic in "Run workflow" to force it: "black bear" or "topic | subject"
 STYLE = os.environ.get("STYLE", "cinematic")
 TONE = os.environ.get("TONE", "energetic")
@@ -193,7 +193,8 @@ def build_caption(t: dict, proj: dict) -> tuple[str, str]:
         "Rules: 'title' is max 70 characters, starts with the main keyword, is a curiosity hook, no clickbait lies. "
         "'caption' is 2 short sentences (max 220 characters) that naturally use the main keyword and one related keyword, "
         "then ONE short question that invites comments. 'hashtags' is exactly 5 tags without '#': 2 specific to the subject, "
-        "2 broader topic tags, 1 format tag like didyouknow. Never use the words AI, artificial intelligence, generated, "
+        "2 broader topic tags, 1 format tag like didyouknow. The question must be specific to the topic. "
+        "Never ask people to like, share, follow or tag anyone, and never write 'comment YES'. Never use the words AI, artificial intelligence, generated, "
         "bot, or any AI-related hashtag. No emojis. "
         'JSON: {"title": "...", "caption": "...", "hashtags": ["..."]}', 0.6) or {}
     title = safe(d.get("title"), sc.get("title"), t["topic"], f"{subject.title()} explained" if subject else "", "Did you know?")[:90]
@@ -226,8 +227,10 @@ def pick_topic(history: list[dict]) -> dict:
                         "messages": [
                             {"role": "system", "content": "You plan short educational social videos. Reply with JSON only."},
                             {"role": "user", "content": (
-                                f"Niche: {NICHE}. Today is {today:%A %d %B %Y}. "
-                                "Give ONE specific, well-established, factual video topic for today that is not generic, and not about artificial intelligence. "
+                                f"Niche: {NICHE}. "
+                                "Give ONE specific, well-established, factual, EVERGREEN video topic that is not generic, and not about artificial intelligence. "
+                                "It must still be true and interesting in a year: no news, no dates, no 'this week', 'today', 'latest' or 'new'. "
+                                "Pick a surprising angle that makes people curious, such as a record, a myth, or a 'how is this even possible' fact. "
                                 f"Already covered, so never repeat or closely overlap with these: {avoid}. "
                                 'JSON: {"topic": "...", "subject": "...", "audience": "...", "hashtags": ["a","b","c"]}. '
                                 '"subject" is the ONE main visible thing, 1 to 3 simple common words, keeping adjectives that matter '
@@ -249,7 +252,7 @@ def pick_topic(history: list[dict]) -> dict:
                     continue
                 t["topic"] = topic
                 t["subject"] = clean_subject(t.get("subject", "")) or derive_subject(topic)
-                t["audience"] = t.get("audience") or AUDIENCE
+                t["audience"] = AUDIENCE  # always your own AUDIENCE setting, never one the model made up
                 return t
             except Exception as e:  # fall back to the list
                 log("LLM topic failed:", e)
@@ -337,7 +340,15 @@ def post_reel(path: pathlib.Path, caption: str, record):
     log("reel finish:", fin)
     record(vid)  # remembered immediately, even if the status check below fails
     for _ in range(30):  # wait for Facebook to process it
-        s = ok(httpx.get(f"{GRAPH}/{vid}", params={"fields": "status", "access_token": PAGE_TOKEN}, timeout=60), "status")
+        resp = httpx.get(f"{GRAPH}/{vid}", params={"fields": "status", "access_token": PAGE_TOKEN}, timeout=60)
+        if resp.status_code >= 400:
+            # The reel was already accepted and recorded above. Not being able to READ its processing status
+            # (usually a missing permission) must not turn a successful post into a failed run.
+            log(f"WARNING: could not read the reel's processing status (HTTP {resp.status_code}). "
+                "The reel was accepted by Facebook; check your Page to confirm it appears.")
+            R["fb_status"] = f"could not be checked (HTTP {resp.status_code}); Facebook accepted the reel and is processing it"
+            break
+        s = resp.json()
         log("fb status:", s.get("status"))
         R["fb_status"] = json.dumps(s.get("status", {}), ensure_ascii=False)[:400]
         st = json.dumps(s.get("status", {}))
@@ -357,7 +368,7 @@ def post_video(path: pathlib.Path, title: str, caption: str, record):
 
 
 def pick_duration() -> int:
-    return int(DURATION_CHOICE) if DURATION_CHOICE in ("30", "60", "120") else random.choice(DURATIONS)
+    return int(DURATION_CHOICE) if DURATION_CHOICE in ("30", "60", "90", "120") else random.choice(DURATIONS)
 
 
 def main():

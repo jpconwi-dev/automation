@@ -14,9 +14,9 @@ on:
         options: [standard, high]
         default: standard
       duration:
-        description: "Length in seconds (auto = random pick of 30 / 60 / 120)"
+        description: "Length in seconds (auto = random pick of 30 / 60 / 90; all of these post as full-screen Reels)"
         type: choice
-        options: [auto, "30", "60", "120"]
+        options: [auto, "30", "60", "90", "120"]
         default: auto
       music:
         description: "Built-in music style (ignored if assets/music has your own tracks)"
@@ -91,7 +91,7 @@ jobs:
           TONE: energetic
           MUSIC_STYLE: ${{ github.event.inputs.music || 'cinematic' }}   # scheduled runs use the word after || ; options: cinematic, epic, upbeat, calm, playful
           MUSIC_DIR: ${{ github.workspace }}/assets/music   # your own royalty-free tracks; empty folder = built-in music
-          DURATIONS: "30,60,120"                 # what 'auto' picks from
+          DURATIONS: "30,60,90"                  # what 'auto' picks from (Reels are 90 s at most; 120 posts as a normal video)
           DURATION: ${{ github.event.inputs.duration }}
           TOPIC: ${{ github.event.inputs.topic }}
           FB_STATE: PUBLISHED                        # DRAFT for the first real test; change to PUBLISHED when it looks right
@@ -106,21 +106,6 @@ jobs:
           done
           set -o pipefail
           python scripts/daily_post.py 2>&1 | tee run.log
-
-      - name: Upload the same video to YouTube
-        id: youtube
-        if: steps.post.outcome == 'success' && (github.event.inputs.dry_run != 'true' || github.event.inputs.youtube_test == 'true')
-        continue-on-error: true          # a YouTube problem must never turn the Facebook post into a failed run
-        env:
-          YT_CLIENT_ID: ${{ secrets.YT_CLIENT_ID }}
-          YT_CLIENT_SECRET: ${{ secrets.YT_CLIENT_SECRET }}
-          YT_REFRESH_TOKEN: ${{ secrets.YT_REFRESH_TOKEN }}
-          YT_PRIVACY: ${{ github.event.inputs.dry_run == 'true' && 'private' || (vars.YT_PRIVACY || 'public') }}
-        run: |
-          python scripts/youtube_upload.py 2>&1 | tee -a run.log
-          rc=${PIPESTATUS[0]}
-          if [ "$rc" = "2" ]; then exit 0; fi   # 2 = no YouTube secrets set yet, simply skip
-          exit "$rc"
 
       - name: Backend log (only when something failed)
         if: failure()
@@ -137,6 +122,22 @@ jobs:
             git pull --rebase
             git push
           fi
+
+      - name: Upload the same video to YouTube
+        id: youtube
+        if: steps.post.outcome == 'success' && (github.event.inputs.dry_run != 'true' || github.event.inputs.youtube_test == 'true')
+        timeout-minutes: 20              # it can never hang the run
+        continue-on-error: true          # a YouTube problem must never turn the Facebook post into a failed run
+        env:
+          YT_CLIENT_ID: ${{ secrets.YT_CLIENT_ID }}
+          YT_CLIENT_SECRET: ${{ secrets.YT_CLIENT_SECRET }}
+          YT_REFRESH_TOKEN: ${{ secrets.YT_REFRESH_TOKEN }}
+          YT_PRIVACY: ${{ github.event.inputs.dry_run == 'true' && 'private' || (vars.YT_PRIVACY || 'public') }}
+        run: |
+          python scripts/youtube_upload.py 2>&1 | tee -a run.log
+          rc=${PIPESTATUS[0]}
+          if [ "$rc" = "2" ]; then exit 0; fi   # 2 = no YouTube secrets set yet, simply skip
+          exit "$rc"
 
       - name: Keep the video for download
         if: always()

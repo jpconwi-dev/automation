@@ -18,7 +18,7 @@ class ProjectCreate(BaseModel):
     audience: str = Field(default="", max_length=200)
     prompt: str = Field(default="", max_length=2000)
     style: Style = "illustrated"
-    duration: Literal[30, 60, 120, 300] = 60
+    duration: Literal[30, 60, 90, 120, 300] = 60
     language: str = "en-us"
     aspect_ratio: Aspect = "16:9"
     tone: Tone = "friendly"

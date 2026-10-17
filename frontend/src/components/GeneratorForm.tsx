@@ -16,7 +16,7 @@ const STYLES: { id: Style; label: string; hint: string; icon: ReactNode }[] = [
 ];
 const DURATIONS: { v: Duration; label: string; exact: string }[] = [
   { v: 30, label: "30 seconds", exact: "0:30" }, { v: 60, label: "60 seconds", exact: "1:00" },
-  { v: 120, label: "2 minutes", exact: "2:00" }, { v: 300, label: "5 minutes", exact: "5:00" },
+  { v: 90, label: "90 seconds", exact: "1:30" }, { v: 120, label: "2 minutes", exact: "2:00" }, { v: 300, label: "5 minutes", exact: "5:00" },
 ];
 const TONES: { id: Tone; label: string; hint: string }[] = [
   { id: "friendly", label: "Friendly", hint: "Warm teacher" },
