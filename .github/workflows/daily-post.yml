@@ -18,6 +18,11 @@ on:
         type: choice
         options: [auto, "30", "60", "120"]
         default: auto
+      music:
+        description: "Built-in music style (ignored if assets/music has your own tracks)"
+        type: choice
+        options: [cinematic, epic, upbeat, calm, playful]
+        default: cinematic
       topic:
         description: "Optional: force a topic, e.g. black bear   (or: topic | subject)"
         required: false
@@ -79,7 +84,8 @@ jobs:
           FB_MODE: auto                          # auto = Reel up to 90s, normal video above | reel | video
           STYLE: cinematic
           TONE: energetic
-          MUSIC_STYLE: cinematic
+          MUSIC_STYLE: ${{ github.event.inputs.music || 'cinematic' }}   # scheduled runs use the word after || ; options: cinematic, epic, upbeat, calm, playful
+          MUSIC_DIR: ${{ github.workspace }}/assets/music   # your own royalty-free tracks; empty folder = built-in music
           DURATIONS: "30,60,120"                 # what 'auto' picks from
           DURATION: ${{ github.event.inputs.duration }}
           TOPIC: ${{ github.event.inputs.topic }}

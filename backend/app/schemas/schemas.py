@@ -7,7 +7,7 @@ Style = Literal["cinematic", "whiteboard", "minimal", "illustrated"]
 Aspect = Literal["16:9", "9:16", "1:1"]
 Mode = Literal["explainer", "prompt"]
 Tone = Literal["friendly", "professional", "energetic", "calm", "humorous", "dramatic"]
-MusicStyle = Literal["auto", "calm", "upbeat", "cinematic", "playful"]
+MusicStyle = Literal["auto", "calm", "upbeat", "cinematic", "playful", "epic"]
 LANGUAGES = ("en-us", "en-gb", "es", "fr", "hi", "it", "ja", "pt-br", "zh")
 VOICE_RE = re.compile(r"^[\w .()'\-]{1,80}$")
 

@@ -3,7 +3,7 @@ export type Aspect = "16:9" | "9:16" | "1:1";
 export type Duration = 30 | 60 | 120 | 300;
 export type Mode = "explainer" | "prompt";
 export type Tone = "friendly" | "professional" | "energetic" | "calm" | "humorous" | "dramatic";
-export type MusicStyle = "auto" | "calm" | "upbeat" | "cinematic" | "playful";
+export type MusicStyle = "auto" | "calm" | "upbeat" | "cinematic" | "playful" | "epic";
 
 export interface FormValues {
   mode: Mode;

@@ -2,11 +2,13 @@
 
 The music is a 16-second chord loop (tiny file) that the renderer repeats; effects are three short mono WAVs.
 """
+import random
 import subprocess
 from pathlib import Path
 
 from ..core.config import settings
 from ..core.errors import PipelineError
+from . import audio
 
 AUTO_STYLE = {"friendly": "calm", "professional": "calm", "energetic": "upbeat", "calm": "calm",
               "humorous": "playful", "dramatic": "cinematic"}
@@ -38,7 +40,9 @@ def _ffmpeg(graph: str, out: Path, label: str = "o") -> None:
         raise PipelineError(f"FFmpeg couldn't synthesise audio: {r.stderr[-300:]}")
 
 
-def make_music(style: str, out: Path) -> Path:
+def _make_music_ffmpeg(style: str, out: Path) -> Path:
+    """Plain chord loop. Only used if the richer synthesiser in audio.py fails."""
+    style = style if style in PROGRESSIONS else "cinematic"
     chords, p = PROGRESSIONS[style]
     parts = []
     for i, freqs in enumerate(chords):
@@ -56,7 +60,7 @@ def make_music(style: str, out: Path) -> Path:
     return out
 
 
-def make_sfx(folder: Path) -> dict[str, Path]:
+def _make_sfx_ffmpeg(folder: Path) -> dict[str, Path]:
     folder.mkdir(parents=True, exist_ok=True)
     sources = {
         "whoosh": "anoisesrc=d=0.9:c=pink:r=22050:a=0.6,highpass=f=250,lowpass=f=3000,afade=t=in:d=0.4,afade=t=out:st=0.4:d=0.5[o]",
@@ -68,3 +72,36 @@ def make_sfx(folder: Path) -> dict[str, Path]:
         out[name] = folder / f"sfx_{name}.wav"
         _ffmpeg(graph, out[name])
     return out
+
+
+def make_music(style: str, out: Path) -> Path:
+    """Seamless stereo loop with pads, bass, drums and a melody (see audio.py). Falls back to the plain loop on error."""
+    try:
+        return audio.write_wav(audio._music_loop(style if style in audio.STYLES else "cinematic"), out)
+    except Exception:
+        return _make_music_ffmpeg(style, out)
+
+
+def make_sfx(folder: Path) -> dict[str, Path]:
+    """Whoosh, pop, chime, sparkle, impact and riser as stereo WAVs. Falls back to the three plain effects on error."""
+    try:
+        folder.mkdir(parents=True, exist_ok=True)
+        return {name: audio.write_wav(x, folder / f"sfx_{name}.wav") for name, x in audio.sfx_set().items()}
+    except Exception:
+        return _make_sfx_ffmpeg(folder)
+
+
+EXTERNAL_AUDIO = {".mp3", ".wav", ".m4a", ".ogg", ".flac", ".aac"}
+
+
+def pick_external_music() -> Path | None:
+    """Your own royalty-free track: MUSIC_PATH (one file) or a random file from MUSIC_DIR. None means use the built-in music."""
+    p = settings.music_path
+    if p and Path(p).is_file():
+        return Path(p)
+    d = settings.music_dir
+    if d and Path(d).is_dir():
+        files = sorted(f for f in Path(d).iterdir() if f.is_file() and f.suffix.lower() in EXTERNAL_AUDIO)
+        if files:
+            return random.choice(files)
+    return None

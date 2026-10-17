@@ -131,11 +131,12 @@ def _run(job_id: str, project_id: str) -> None:
 
         # --- music and effects ---
         upd(stage="audio", progress=65, message="Composing music and sound effects")
-        music = sfx = None
+        music = sfx = music_ext = None
         if project["background_music"]:
             check()
-            if settings.music_path and settings.music_path.is_file():
-                music = settings.music_path
+            music_ext = soundtrack.pick_external_music()
+            if music_ext:
+                music = music_ext
             else:
                 style = soundtrack.resolve_style(project["music_style"], project["tone"])
                 music = soundtrack.make_music(style, tmp / "music_loop.wav")
@@ -147,7 +148,8 @@ def _run(job_id: str, project_id: str) -> None:
         check()
         upd(stage="rendering", progress=72, message="Rendering video with FFmpeg")
         out = render.render_video(project, script.scenes, durations, speech, pdir, tmp, check,
-                                  lambda f: upd(progress=72 + int(27 * f)), music=music, sfx=sfx)
+                                  lambda f: upd(progress=72 + int(27 * f)), music=music, sfx=sfx,
+                                  music_external=bool(music_ext))
         if storage.usage_bytes() + out.stat().st_size > storage.limit_bytes():
             storage.enforce(protect, reserve=out.stat().st_size)
         shutil.move(str(out), pdir / "video.mp4")

@@ -88,7 +88,8 @@ def _run(cmd: list[str], cwd: Path, tmp: Path, total: float, check, on_progress)
 
 
 def render_video(project: dict, scenes, durations: list[float], speech: list[float], pdir: Path,
-                 tmp: Path, check, on_progress, music: Path | None = None, sfx: dict | None = None) -> Path:
+                 tmp: Path, check, on_progress, music: Path | None = None, sfx: dict | None = None,
+                 music_external: bool = False) -> Path:
     q = _preset()
     W, H = q["dims"][project["aspect_ratio"]]
     OW, OH = int(W * q["oversample"]) // 2 * 2, int(H * q["oversample"]) // 2 * 2  # zoom canvas (even numbers)
@@ -160,16 +161,19 @@ def render_video(project: dict, scenes, durations: list[float], speech: list[flo
     if music:  # original music, quieter than the voice and ducked while the narrator speaks
         mi = add("-stream_loop", "-1", "-i", str(Path(music).resolve()))
         f.append("[narr]asplit=2[nmain][nside]")
-        f.append(f"[{mi}:a]{stereo},volume=0.45,atrim=0:{total:.3f},asetpts=PTS-STARTPTS,"
+        norm = ",loudnorm=I=-24:LRA=7:TP=-3,aresample=44100" if music_external else ""  # your own tracks vary a lot in loudness
+        f.append(f"[{mi}:a]{stereo}{norm},volume=0.45,atrim=0:{total:.3f},asetpts=PTS-STARTPTS,"
                  f"afade=t=in:d=1.5,afade=t=out:st={max(0, total - 2.5):.3f}:d=2.5[bgm]")
         f.append("[bgm][nside]sidechaincompress=threshold=0.03:ratio=10:attack=15:release=400[duck]")
         mix = ["nmain", "duck"]
     if sfx:
         events = {"whoosh": [(starts[k] - 0.2, 0.5) for k in range(1, n)],
-                  "pop": [(starts[k] + 0.25, 0.35) for k in range(n)],
-                  "chime": [(max(0.0, total - 2.4), 0.5)]}
+                  "pop": [(starts[k] + 0.25, 0.3) for k in range(n)],
+                  "chime": [(max(0.0, total - 2.4), 0.5)],
+                  "impact": [(0.0, 0.55)],                                          # deep hit as the video opens
+                  "riser": [(starts[n - 1] - 1.1, 0.3)] if n >= 3 else []}          # build-up into the last scene
         for kind, evs in events.items():
-            if not evs:
+            if not evs or kind not in sfx:
                 continue
             si = add("-i", str(Path(sfx[kind]).resolve()))
             f.append(f"[{si}:a]{stereo},asplit={len(evs)}" + "".join(f"[{kind}{j}]" for j in range(len(evs))))

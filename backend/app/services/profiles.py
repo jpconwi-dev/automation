@@ -18,7 +18,7 @@ TONE_PITCH = {"friendly": 3, "professional": -2, "energetic": 8, "calm": -5, "hu
 # Background music used when the music style is "auto"
 TONE_MUSIC = {"friendly": "playful", "professional": "calm", "energetic": "upbeat", "calm": "calm",
               "humorous": "playful", "dramatic": "cinematic"}
-MUSIC_STYLES = ("calm", "upbeat", "cinematic", "playful")
+MUSIC_STYLES = ("calm", "upbeat", "cinematic", "playful", "epic")
 
 
 def tone_of(p: dict) -> str:

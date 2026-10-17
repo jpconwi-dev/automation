@@ -143,6 +143,8 @@ STYLES = {
     "upbeat": dict(bpm=112, wet=0.12, prog=[(C, _MAJ), (G, _MAJ), (A, _MIN), (F, _MAJ), (C, _MAJ), (G, _MAJ), (F, _MAJ), (G, _DOM)]),
     "cinematic": dict(bpm=64, wet=0.42, prog=[(A, _MIN), (F, _MAJ), (C, _MAJ), (G, _MAJ), (A, _MIN), (F, _MAJ), (D, _MIN), (E, _DOM)]),
     "playful": dict(bpm=100, wet=0.16, prog=[(C, _MAJ), (A, _MIN), (F, _MAJ), (G, _MAJ), (C, _MAJ), (A, _MIN), (D, _MIN7), (G, _DOM)]),
+    # trailer / documentary feel: big pads, heartbeat drums, a rolling arpeggio that grows in the second half
+    "epic": dict(bpm=76, wet=0.45, prog=[(A, _MIN), (F, _MAJ), (C, _MAJ), (G, _MAJ), (A, _MIN), (F, _MAJ), (D, _MIN), (E, _DOM)]),
 }
 _PENTA = [0, 2, 4, 7, 9]  # major pentatonic degrees, used for melodies
 
@@ -183,7 +185,7 @@ def _music_loop(style: str) -> np.ndarray:
     bars = 16
     n = int(bars * bar * SR)
     buf = np.zeros((2, n), dtype=np.float32)
-    rng = np.random.default_rng({"calm": 1, "upbeat": 2, "cinematic": 3, "playful": 4}[style])
+    rng = np.random.default_rng({"calm": 1, "upbeat": 2, "cinematic": 3, "playful": 4, "epic": 5}[style])
 
     for b in range(bars):
         root, q = cfg["prog"][b % 8]
@@ -229,6 +231,20 @@ def _music_loop(style: str) -> np.ndarray:
             if second:
                 for k, nt in enumerate(_melody_notes(high, rng, 2, 69, 84)):
                     _put(buf, t0 + k * 2 * beat, _pad(_hz(nt), 2 * beat, 0.5, 0.8), 0.22, pan=0.2, wrap=True)
+        elif style == "epic":
+            for i, nt in enumerate(tones + [tones[0] + 12]):
+                _put(buf, t0, _pad(_hz(nt - 12 if i == 0 else nt), bar, 1.0, 1.4), 0.30, pan=-0.5 + 0.3 * i, wrap=True)
+            _put(buf, t0, _bass(_hz(tones[0] - 24), bar), 0.60, wrap=True)
+            _put(buf, t0, _timpani(), 0.60, wrap=True)                        # heartbeat: strong on 1, softer on 3
+            _put(buf, t0 + 2 * beat, _timpani(), 0.38, wrap=True)
+            for k in range(8):                                                # rolling arpeggio, louder in the second half
+                _put(buf, t0 + k * beat / 2, _pluck(_hz(high[k % len(high)] + 12), 0.6, 6.0),
+                     0.11 if second else 0.07, pan=(-0.5 if k % 2 else 0.5), wrap=True)
+            if second:
+                for k in range(8):
+                    _put(buf, t0 + k * beat / 2, _hat(0.6, 0.05), 0.12, pan=0.35, wrap=True)
+                for k, nt in enumerate(_melody_notes(high, rng, 2, 69, 84)):
+                    _put(buf, t0 + k * 2 * beat, _pad(_hz(nt), 2 * beat, 0.4, 0.8), 0.24, pan=0.2, wrap=True)
         else:  # playful
             for k in (0, 2):
                 _put(buf, t0 + k * beat, _bass(_hz(tones[0] - 12), beat * 0.7, punchy=True), 0.42, wrap=True)
@@ -300,6 +316,51 @@ def _sfx_chime() -> np.ndarray:
         o = int(delay * SR)
         out[o:o + len(s)] += s[: len(out) - o] * (0.9 - 0.15 * k)
     return _stereo(out / (np.max(np.abs(out)) + 1e-9) * 0.8)
+
+
+@lru_cache(maxsize=None)
+def _sfx_impact() -> np.ndarray:
+    """Deep cinematic hit for the first second of the video: a falling sub boom with a short crack on top."""
+    t = _t(1.7)
+    f = 32 + 90 * np.exp(-t * 2.4)
+    boom = np.sin(2 * np.pi * np.cumsum(f) / SR) * np.exp(-t * 2.9)
+    crack = np.random.default_rng(5).standard_normal(len(t)) * np.exp(-t * 16) * 0.3
+    s = boom + crack
+    return _stereo(s / (np.max(np.abs(s)) + 1e-9) * 0.9)
+
+
+@lru_cache(maxsize=None)
+def _sfx_riser() -> np.ndarray:
+    """1.2 s build-up: filtered noise and a rising tone that swell to a sudden stop (used before the last scene)."""
+    n = int(1.2 * SR)
+    t = np.arange(n) / n
+    x = np.random.default_rng(9).standard_normal(n)
+    cutoff = 300 + 5700 * t ** 2
+    a = 1 - np.exp(-2 * np.pi * cutoff / SR)
+    y, last = np.empty(n), 0.0
+    for i in range(n):
+        last += a[i] * (x[i] - last)
+        y[i] = last
+    tone = np.sin(2 * np.pi * np.cumsum(220 + 700 * t ** 2) / SR) * 0.25
+    s = (y / (np.max(np.abs(y)) + 1e-9) + tone) * (t ** 2.2)
+    s[-int(0.03 * SR):] *= np.linspace(1, 0, int(0.03 * SR))
+    return _stereo(s / (np.max(np.abs(s)) + 1e-9) * 0.85, -0.3 + 0.6 * t)
+
+
+def write_wav(x: np.ndarray, path: Path) -> Path:
+    """Write a stereo float array (2, N) as a 16-bit WAV."""
+    pcm = (np.clip(x, -0.98, 0.98).T * 32767).astype("<i2")
+    with wave.open(str(path), "wb") as w:
+        w.setnchannels(2)
+        w.setsampwidth(2)
+        w.setframerate(SR)
+        w.writeframes(pcm.tobytes())
+    return path
+
+
+def sfx_set() -> dict:
+    return {"whoosh": _sfx_whoosh(), "pop": _sfx_pop(), "chime": _sfx_chime(), "sparkle": _sfx_sparkle(),
+            "impact": _sfx_impact(), "riser": _sfx_riser()}
 
 
 # ----------------------------------------------------------------------------- external music

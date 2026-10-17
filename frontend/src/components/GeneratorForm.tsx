@@ -28,7 +28,7 @@ const TONES: { id: Tone; label: string; hint: string }[] = [
 ];
 const MUSIC: { id: MusicStyle; label: string }[] = [
   { id: "auto", label: "Auto (match the tone)" }, { id: "calm", label: "Calm ambient" }, { id: "upbeat", label: "Upbeat" },
-  { id: "cinematic", label: "Cinematic" }, { id: "playful", label: "Playful" },
+  { id: "cinematic", label: "Cinematic" }, { id: "playful", label: "Playful" }, { id: "epic", label: "Epic" },
 ];
 const ASPECTS: Aspect[] = ["16:9", "9:16", "1:1"];
 export const LANGUAGES = [
