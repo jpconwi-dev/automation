@@ -9,6 +9,7 @@ import difflib
 import json
 import os
 import pathlib
+import random
 import re
 import sys
 import time
@@ -24,10 +25,16 @@ AUDIENCE = os.environ.get("AUDIENCE", "a general audience")
 LLM_KEY = os.environ.get("LLM_API_KEY", "")        # Groq key, used only to invent a fresh topic each day
 LLM_URL = os.environ.get("LLM_BASE_URL", "https://api.groq.com/openai/v1")
 LLM_MODEL = os.environ.get("LLM_MODEL", "llama-3.3-70b-versatile")
-FB_MODE = os.environ.get("FB_MODE", "reel")        # reel (9:16, up to ~90s) | video (any aspect)
+FB_MODE = os.environ.get("FB_MODE", "auto")        # auto = Reel when 90s or less, normal video when longer | reel | video
 FB_STATE = os.environ.get("FB_STATE", "PUBLISHED") # set DRAFT to test without going public
 DRY_RUN = os.environ.get("DRY_RUN", "") == "true"  # make the video but do not post
-DURATION = int(os.environ.get("DURATION", "60"))
+DURATIONS = [int(x) for x in re.split(r"[,\s]+", os.environ.get("DURATIONS", "30,60,120")) if x in ("30", "60", "120")] or [60]
+DURATION_CHOICE = os.environ.get("DURATION", "").strip()   # "30" | "60" | "120" | "" / "auto" = random from DURATIONS
+TOPIC_OVERRIDE = os.environ.get("TOPIC", "").strip()       # type a topic in "Run workflow" to force it: "black bear" or "topic | subject"
+STYLE = os.environ.get("STYLE", "cinematic")
+TONE = os.environ.get("TONE", "energetic")
+MUSIC_STYLE = os.environ.get("MUSIC_STYLE", "cinematic")
+FB_ASPECT = os.environ.get("FB_ASPECT", "9:16")
 GRAPH = "https://graph.facebook.com/v25.0"
 RUPLOAD = "https://rupload.facebook.com/video-upload/v25.0"
 H = {"X-Access-Key": KEY}
@@ -84,9 +91,111 @@ def already_covered(candidate: str, history: list[dict]) -> bool:
     return False
 
 
+# ---------- 0b. small helpers: ask the LLM, keep the word "AI" out of the post ----------
+AI_WORDS = re.compile(r"\b(?:artificial intelligence|ai[- ]generated|ai[- ]made|ai[- ]powered|ai[- ]driven|made with ai|chat ?gpt|a\.i\.|ai|gpt|llm)\b", re.I)
+AI_TAG = re.compile(r"^(?:ai|artificialintelligence|chatgpt|gpt)(?:art|video|tools?|tech|generated|made|content|news|facts|voice)?$", re.I)
+
+
+def has_ai(text: str) -> bool:
+    return bool(AI_WORDS.search(text or ""))
+
+
+def safe(*options: str) -> str:
+    """First option that does not mention AI. Removing the word would leave broken sentences, so whole options are skipped."""
+    for o in options:
+        o = " ".join((o or "").split())
+        if o and not has_ai(o):
+            return o
+    return ""
+
+
+def llm_json(system: str, user: str, temperature: float = 0.7) -> dict | None:
+    if not LLM_KEY:
+        return None
+    try:
+        r = httpx.post(f"{LLM_URL}/chat/completions", headers={"Authorization": f"Bearer {LLM_KEY}"}, timeout=60,
+                       json={"model": LLM_MODEL, "temperature": temperature, "response_format": {"type": "json_object"},
+                             "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}]})
+        data = r.json()
+        if "choices" not in data:
+            log(f"LLM error ({r.status_code}):", r.text[:300])
+            return None
+        return json.loads(data["choices"][0]["message"]["content"])
+    except Exception as e:
+        log("LLM call failed:", e)
+        return None
+
+
+def clean_subject(s: str) -> str:
+    s = re.sub(r"[^A-Za-z0-9 '\-]", " ", s or "")
+    return " ".join(s.split()[:3]).strip().lower()
+
+
+def derive_subject(topic: str) -> str:
+    """The main visible thing the footage must show, e.g. 'black bear'. Empty when it can't be told."""
+    d = llm_json("You pick stock-video search terms. Reply with JSON only.",
+                 f'Topic: "{topic}". What is the ONE main visible subject that footage must show? Reply 1 to 3 simple, '
+                 'common English words a stock-video site would tag, e.g. "black bear", "volcano", "honey bee". '
+                 'Keep every adjective that matters (black bear, not bear). If the topic has no single visible subject, '
+                 'reply an empty string. JSON: {"subject": "..."}', 0.2)
+    return clean_subject((d or {}).get("subject", ""))
+
+
+def parse_topic_line(line: str) -> dict:
+    """'topic | subject' or just 'topic' (subject is then worked out automatically)."""
+    topic, _, subj = line.partition("|")
+    topic, subj = topic.strip(), clean_subject(subj)
+    return {"topic": topic, "subject": subj or derive_subject(topic), "audience": AUDIENCE, "hashtags": []}
+
+
+def hashtag_list(raw: list, t: dict) -> list[str]:
+    tags, seen = [], set()
+    for h in list(raw or []):
+        w = re.sub(r"[^A-Za-z0-9]", "", str(h))
+        if not w or AI_TAG.match(w) or w.lower() in seen or len(w) > 30:
+            continue
+        seen.add(w.lower())
+        tags.append("#" + w)
+    if len(tags) < 4:  # top up from the subject / topic so the post is never left without tags
+        subj_words = _words(t.get("subject", ""))
+        extra = [t.get("subject", "").replace(" ", "")] + [w for w in sorted(_words(t["topic"]) - subj_words, key=len, reverse=True)[:3]]
+        extra += ["didyouknow", "facts", "nature" if t.get("subject") else "science"]
+        for w in extra:
+            w = re.sub(r"[^A-Za-z0-9]", "", w)
+            if w and not AI_TAG.match(w) and w.lower() not in seen and len(tags) < 6:
+                seen.add(w.lower())
+                tags.append("#" + w)
+    return tags[:6]
+
+
+def build_caption(t: dict, proj: dict) -> tuple[str, str]:
+    """Search-friendly title + caption + hashtags. Never mentions AI."""
+    sc = proj.get("script") or {}
+    subject = t.get("subject", "")
+    d = llm_json(
+        "You write Facebook Reel captions that rank in Facebook search and make people watch to the end. Reply JSON only.",
+        f"Topic: {t['topic']}\nMain subject: {subject or 'n/a'}\nWhat the video says: {sc.get('description', '')} {sc.get('hook', '')}\n"
+        f"Audience: {t.get('audience', AUDIENCE)}\n"
+        "Rules: 'title' is max 70 characters, starts with the main keyword, is a curiosity hook, no clickbait lies. "
+        "'caption' is 2 short sentences (max 220 characters) that naturally use the main keyword and one related keyword, "
+        "then ONE short question that invites comments. 'hashtags' is exactly 5 tags without '#': 2 specific to the subject, "
+        "2 broader topic tags, 1 format tag like didyouknow. Never use the words AI, artificial intelligence, generated, "
+        "bot, or any AI-related hashtag. No emojis. "
+        'JSON: {"title": "...", "caption": "...", "hashtags": ["..."]}', 0.6) or {}
+    title = safe(d.get("title"), sc.get("title"), t["topic"], f"{subject.title()} explained" if subject else "", "Did you know?")[:90]
+    body = safe(d.get("caption"), sc.get("description"),
+                f"A quick look at {subject or 'this topic'} and what makes it so interesting. What should we cover next?")
+    if subject and not (set(subject.split()) & _words(title)):
+        title = f"{subject.title()}: {title}"[:90]
+    tags = hashtag_list(d.get("hashtags") or t.get("hashtags") or [], t)
+    return title, "\n\n".join(x for x in [title, body, " ".join(tags)] if x)
+
+
 # ---------- 1. topic (the automatic content idea) ----------
 def pick_topic(history: list[dict]) -> dict:
     today = dt.date.today()
+    if TOPIC_OVERRIDE:
+        return parse_topic_line(TOPIC_OVERRIDE)
     if NICHE and LLM_KEY:
         covered = [x for p in history[-80:] for x in (p.get("topic", ""), p.get("title", "")) if x]
         for attempt in range(5):  # ask again if the idea is a repeat
@@ -104,9 +213,11 @@ def pick_topic(history: list[dict]) -> dict:
                             {"role": "system", "content": "You plan short educational social videos. Reply with JSON only."},
                             {"role": "user", "content": (
                                 f"Niche: {NICHE}. Today is {today:%A %d %B %Y}. "
-                                "Give ONE specific, surprising, factual video topic for today that is not generic. "
+                                "Give ONE specific, well-established, factual video topic for today that is not generic, and not about artificial intelligence. "
                                 f"Already covered, so never repeat or closely overlap with these: {avoid}. "
-                                'JSON: {"topic": "...", "audience": "...", "hashtags": ["#a","#b","#c"]}')},
+                                'JSON: {"topic": "...", "subject": "...", "audience": "...", "hashtags": ["a","b","c"]}. '
+                                '"subject" is the ONE main visible thing, 1 to 3 simple common words, keeping adjectives that matter '
+                                '(e.g. "black bear", "volcano", "honey bee").')},
                         ],
                     },
                 )
@@ -123,16 +234,17 @@ def pick_topic(history: list[dict]) -> dict:
                     covered.append(topic)
                     continue
                 t["topic"] = topic
+                t["subject"] = clean_subject(t.get("subject", "")) or derive_subject(topic)
                 t["audience"] = t.get("audience") or AUDIENCE
                 return t
             except Exception as e:  # fall back to the list
                 log("LLM topic failed:", e)
                 break
     lines = [l.strip() for l in pathlib.Path("scripts/topics.txt").read_text().splitlines() if l.strip() and not l.startswith("#")]
-    fresh = [l for l in lines if not already_covered(l, history)]
+    fresh = [l for l in lines if not already_covered(l.split("|")[0], history)]
     if not fresh:
         sys.exit("No unused topics left (the AI topic step failed and topics.txt is used up). Add new lines to scripts/topics.txt. Nothing was posted.")
-    return {"topic": fresh[today.toordinal() % len(fresh)], "audience": AUDIENCE, "hashtags": []}
+    return parse_topic_line(fresh[today.toordinal() % len(fresh)])
 
 
 # ---------- 2. make the video on your Render backend ----------
@@ -149,13 +261,13 @@ def wake_backend():
     sys.exit("backend never woke up")
 
 
-def make_video(t: dict) -> tuple[pathlib.Path, dict]:
+def make_video(t: dict, duration: int) -> tuple[pathlib.Path, dict]:
     body = {
         "mode": "explainer", "topic": t["topic"][:500], "audience": t["audience"][:200],
-        "style": "illustrated", "duration": DURATION, "language": "en-us",
-        "aspect_ratio": "9:16" if FB_MODE == "reel" else "16:9",
-        "tone": "energetic", "voice": "auto", "voice_speed": 1.0,
-        "background_music": True, "music_style": "auto", "sound_effects": True,
+        "style": STYLE, "duration": duration, "language": "en-us",
+        "aspect_ratio": FB_ASPECT, "subject": t.get("subject", ""),
+        "tone": TONE, "voice": "auto", "voice_speed": 1.0,
+        "background_music": True, "music_style": MUSIC_STYLE, "sound_effects": True,
     }
     p = ok(httpx.post(f"{API}/api/projects", json=body, headers=H, timeout=60), "create project")
     pid = p["id"]
@@ -228,18 +340,31 @@ def post_video(path: pathlib.Path, title: str, caption: str, record):
     record(res.get("id", ""))
 
 
+def pick_duration() -> int:
+    return int(DURATION_CHOICE) if DURATION_CHOICE in ("30", "60", "120") else random.choice(DURATIONS)
+
+
 def main():
     if not DRY_RUN:
         check_token()  # fail fast, before spending minutes on a video
     history = load_history()
     log(f"{len(history)} earlier posts on record")
     t = pick_topic(history)
+    duration = pick_duration()
+    as_reel = FB_MODE in ("reel", "auto") and duration <= 90  # Facebook Reels must be 3 to 90 seconds
+    log(f"topic: {t['topic']} | subject: {t.get('subject') or '-'} | {duration}s | {'reel' if as_reel else 'normal video'}")
     wake_backend()
-    path, proj = make_video(t)
-    s = proj.get("script") or {}
-    title = s.get("title") or t["topic"]
-    caption = "\n\n".join(x for x in [title, s.get("description", ""), " ".join(t.get("hashtags", [])),
-                                       "Made with AI."] if x)
+    path, proj = make_video(t, duration)
+    meta = proj.get("assets_meta") or {}
+    for k, v in sorted(meta.items()):  # shows what footage each scene got, so you can check it matches the subject
+        log(f"  {k}: {v.get('tags') or v.get('note') or '-'}")
+    gaps = [k for k, v in meta.items() if "placeholder" in json.dumps(v).lower()]
+    if gaps and not DRY_RUN:
+        sys.exit(f"{len(gaps)} scene(s) found no matching footage and would show a placeholder graphic. "
+                 "Not posting this one; the topic is not used up, so the next run picks again.")
+    if gaps:
+        log(f"WARNING: {len(gaps)} scene(s) have no matching footage (a real run would not post this video)")
+    title, caption = build_caption(t, proj)
     log("caption:\n" + caption)
     if DRY_RUN:
         log("DRY_RUN on: not posting")
@@ -250,11 +375,12 @@ def main():
 
     def record(video_id: str):
         save_history(load_history() + [{
-            "topic": t["topic"], "title": title, "video_id": video_id, "state": FB_STATE,
-            "mode": FB_MODE, "at": dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds")}])
+            "topic": t["topic"], "subject": t.get("subject", ""), "title": title, "video_id": video_id,
+            "state": FB_STATE, "mode": "reel" if as_reel else "video", "seconds": duration,
+            "at": dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds")}])
         log("recorded in", HISTORY)
 
-    if FB_MODE == "reel":
+    if as_reel:
         post_reel(path, caption, record)
     else:
         post_video(path, title, caption, record)

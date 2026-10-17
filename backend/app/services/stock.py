@@ -10,7 +10,7 @@ from PIL import Image
 
 from ..core.config import settings
 from ..core.errors import PipelineError
-from .render import DIMS
+from .render import _preset
 
 STOP = set("""a an and are as at be been but by can for from has have how in into is it its more most not of on or our so
 that the their them then there these they this to up use used uses using was were what when where which while who why will with
@@ -96,13 +96,13 @@ def _pixabay(query: str, aspect: str) -> list[dict]:
 
 
 def _pick_file(files: list[dict], aspect: str) -> dict:
-    W, H = DIMS[aspect]
+    W, H = _preset()["dims"][aspect]
     big = [f for f in files if f["width"] >= W and f["height"] >= H]
     return min(big, key=lambda f: f["width"] * f["height"]) if big else max(files, key=lambda f: f["width"] * f["height"])  # smallest that is big enough
 
 
 def _shrink(src, dst, aspect: str) -> None:
-    W, H = DIMS[aspect]
+    W, H = _preset()["dims"][aspect]
     cmd = [settings.ffmpeg_path, "-y", "-v", "error", "-i", str(src), "-t", "16", "-an",
            "-vf", f"scale={W}:{H}:force_original_aspect_ratio=increase,crop={W}:{H},fps=24",
            "-c:v", "libx264", "-preset", "veryfast", "-crf", "27", "-pix_fmt", "yuv420p", str(dst)]
@@ -114,7 +114,13 @@ def _shrink(src, dst, aspect: str) -> None:
         raise PipelineError(f"FFmpeg couldn't process a stock clip: {r.stderr[-300:]}")
 
 
-def fetch_clip(queries: list[str], aspect: str, index: int, clip_path, thumb_path, context: str = "") -> dict | None:
+def has_all(video: dict, must: set[str]) -> bool:
+    """True when the clip's tags contain every subject word, so 'black bear' never gets 'polar bear' footage."""
+    return must <= tokens(video.get("tags", ""))
+
+
+def fetch_clip(queries: list[str], aspect: str, index: int, clip_path, thumb_path, context: str = "",
+               must: set[str] | None = None) -> dict | None:
     """Download the best-matching unused clip. Clips whose tags don't relate to the search are rejected,
     so a scene gets no footage (and a labeled placeholder) rather than unrelated footage."""
     provider = settings.image_backend
@@ -126,13 +132,17 @@ def fetch_clip(queries: list[str], aspect: str, index: int, clip_path, thumb_pat
         _used[pid] = set()
     used = _used.setdefault(pid, set())
     ctok = tokens(context)
-    for q in queries:
+    # With a subject: first look for a clip not used yet, then (before giving up) reuse one that was already used.
+    for allow_used in ((False, True) if must else (False,)):
+      for q in queries:
         qtok = tokens(q)
         if not qtok:
             continue
-        ranked = sorted(((score(v, qtok, ctok), v) for v in search(q, aspect) if v["id"] not in used),
+        ranked = sorted(((score(v, qtok, ctok), v) for v in search(q, aspect) if allow_used or v["id"] not in used),
                         key=lambda t: -t[0])
         ranked = [(sc, v) for sc, v in ranked if sc >= 3]  # at least one search word must appear in the clip's tags
+        if must:
+            ranked = [(sc, v) for sc, v in ranked if has_all(v, must)]  # and ALL subject words
         if not ranked:
             continue
         v = ranked[0][1]

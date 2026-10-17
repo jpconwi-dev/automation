@@ -13,6 +13,15 @@ on:
         type: choice
         options: [standard, high]
         default: standard
+      duration:
+        description: "Length in seconds (auto = random pick of 30 / 60 / 120)"
+        type: choice
+        options: [auto, "30", "60", "120"]
+        default: auto
+      topic:
+        description: "Optional: force a topic, e.g. black bear   (or: topic | subject)"
+        required: false
+        default: ""
 
 permissions:
   contents: write          # lets the job save the list of posted topics back to the repo
@@ -24,7 +33,7 @@ concurrency:
 jobs:
   post:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
 
@@ -50,7 +59,8 @@ jobs:
           LLM_FALLBACK_MODELS: openai/gpt-oss-20b,llama-3.1-8b-instant
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          IMAGE_BACKEND: cloudflare
+          IMAGE_BACKEND: pexels                  # real moving stock footage (free key from pexels.com/api)
+          PEXELS_API_KEY: ${{ secrets.PEXELS_API_KEY }}
           TTS_BACKEND: cloudflare
           VIDEO_BACKEND: none
           FFMPEG_THREADS: "2"
@@ -65,8 +75,14 @@ jobs:
           FB_PAGE_TOKEN: ${{ secrets.FB_PAGE_TOKEN }}
           NICHE: ${{ vars.NICHE }}
           AUDIENCE: ${{ vars.AUDIENCE }}
-          FB_MODE: reel                          # reel | video
-          FB_STATE: DRAFT                        # DRAFT for the first real test; change to PUBLISHED when it looks right
+          FB_MODE: auto                          # auto = Reel up to 90s, normal video above | reel | video
+          STYLE: cinematic
+          TONE: energetic
+          MUSIC_STYLE: cinematic
+          DURATIONS: "30,60,120"                 # what 'auto' picks from
+          DURATION: ${{ github.event.inputs.duration }}
+          TOPIC: ${{ github.event.inputs.topic }}
+          FB_STATE: PUBLISHED                        # DRAFT for the first real test; change to PUBLISHED when it looks right
           DRY_RUN: ${{ github.event.inputs.dry_run }}
         run: |
           cd backend

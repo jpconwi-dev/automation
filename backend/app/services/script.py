@@ -47,6 +47,10 @@ def _messages(p: dict, feedback: str | None) -> list[dict]:
         brief = f"Video brief from the user: {p['prompt']}\n" + (f"Audience: {p['audience']}\n" if p.get("audience") else "")
     else:
         brief = f"Topic: {p['topic']}\nAudience: {p['audience']}\n"
+        if p.get("subject"):
+            brief += (f"Main subject: {p['subject']}. Every scene must be about and show the {p['subject']} "
+                      f"(never a different animal, object or place), and every search_keywords value must begin with "
+                      f"\"{p['subject']}\".\n")
     user = (
         f"{brief}Narration tone: {p.get('tone', 'friendly')} ({TONE_GUIDE[p.get('tone', 'friendly')]}).\n"
         f"Write the script (narration, titles and captions) in {LANG_NAMES[p['language']]}.\n"

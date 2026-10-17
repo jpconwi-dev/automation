@@ -27,8 +27,9 @@ class ProjectCreate(BaseModel):
     background_music: bool = True
     music_style: MusicStyle = "auto"
     sound_effects: bool = True
+    subject: str = Field(default="", max_length=80)  # the exact thing the footage must show, e.g. "black bear"
 
-    @field_validator("topic", "audience", "prompt")
+    @field_validator("topic", "audience", "prompt", "subject")
     @classmethod
     def tidy(cls, v: str) -> str:
         return " ".join(v.split())

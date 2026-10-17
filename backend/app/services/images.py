@@ -238,13 +238,24 @@ def make_scene_image(project: dict, script, scene, index: int, pdir: Path) -> di
         n = f"scene_{index:02d}"
         top = lambda text, k: " ".join(sorted(stock.tokens(text), key=lambda w: -len(w))[:k])
         queries = []
-        for q in (scene.search_keywords.strip(), top(scene.visual_description, 3), top(scene.on_screen_text, 3),
-                  top(project.get("topic") or project.get("prompt", ""), 3)):
-            if q and q not in queries:
-                queries.append(q)
+        subject = (project.get("subject") or "").strip()
+        must = stock.tokens(subject) if subject else None
+        if must:  # every search contains the subject, and a clip must be tagged with ALL its words (black AND bear)
+            for e in (scene.search_keywords.strip(), top(scene.visual_description, 2), top(scene.on_screen_text, 2)):
+                q = e if must <= stock.tokens(e) else f"{subject} {e}".strip()
+                if q and q not in queries:
+                    queries.append(q)
+            for q in (subject, f"{subject} nature"):
+                if q not in queries:
+                    queries.append(q)
+        else:
+            for q in (scene.search_keywords.strip(), top(scene.visual_description, 3), top(scene.on_screen_text, 3),
+                      top(project.get("topic") or project.get("prompt", ""), 3)):
+                if q and q not in queries:
+                    queries.append(q)
         context = f"{scene.visual_description} {scene.on_screen_text} {scene.search_keywords}"
         meta = stock.fetch_clip(queries, project["aspect_ratio"], index, pdir / f"{n}_clip.mp4", pdir / f"{n}.png",
-                                context=context)
+                                context=context, must=must)
         if meta is None:  # nothing matched: labeled animated placeholder for this scene only
             _make_layered(project, scene, index, pdir, seed)
             return {"ai_generated": False, "model": None, "note": "no stock footage found; placeholder used"}
