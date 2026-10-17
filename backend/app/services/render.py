@@ -7,7 +7,22 @@ from pathlib import Path
 from ..core.config import settings
 from ..core.errors import Cancelled, PipelineError
 
-DIMS = {"16:9": (1280, 720), "9:16": (720, 1280), "1:1": (1024, 1024)}
+# Quality presets. "standard" is exactly what was used before, so nothing changes unless VIDEO_QUALITY=high is set.
+PRESETS = {
+    "standard": {"dims": {"16:9": (1280, 720), "9:16": (720, 1280), "1:1": (1024, 1024)},
+                 "crf": "26", "maxrate": "2200k", "bufsize": "4400k", "abitrate": "128k", "oversample": 2.0},
+    "high": {"dims": {"16:9": (1920, 1080), "9:16": (1080, 1920), "1:1": (1080, 1080)},
+             "crf": "22", "maxrate": "5000k", "bufsize": "10000k", "abitrate": "160k", "oversample": 1.5},
+}
+
+
+DIMS = PRESETS["standard"]["dims"]  # kept: images.py, stock.py and video_ai.py import it, so it must still exist
+
+
+def _preset():
+    return PRESETS.get((settings.video_quality or "standard").strip().lower(), PRESETS["standard"])
+
+
 SUB_SIZE = {"16:9": 13, "9:16": 8, "1:1": 11}
 FPS, T = 24, 0.5  # frame rate, crossfade seconds
 
@@ -74,7 +89,9 @@ def _run(cmd: list[str], cwd: Path, tmp: Path, total: float, check, on_progress)
 
 def render_video(project: dict, scenes, durations: list[float], speech: list[float], pdir: Path,
                  tmp: Path, check, on_progress, music: Path | None = None, sfx: dict | None = None) -> Path:
-    W, H = DIMS[project["aspect_ratio"]]
+    q = _preset()
+    W, H = q["dims"][project["aspect_ratio"]]
+    OW, OH = int(W * q["oversample"]) // 2 * 2, int(H * q["oversample"]) // 2 * 2  # zoom canvas (even numbers)
     n, total = len(scenes), sum(durations)
     starts = [sum(durations[:i]) for i in range(n)]
     write_srt(pdir / "subtitles.srt", scenes, list(zip(starts, speech)))
@@ -119,7 +136,7 @@ def render_video(project: dict, scenes, durations: list[float], speech: list[flo
             ]
         else:
             idx = loop(f"{name}.png", L)
-            base = f"[{idx}:v]scale={W * 2}:{H * 2}:force_original_aspect_ratio=increase,crop={W * 2}:{H * 2}"
+            base = f"[{idx}:v]scale={OW}:{OH}:force_original_aspect_ratio=increase,crop={OW}:{OH}"
             if settings.ken_burns:
                 rate = 0.08 / max(1, int(L * FPS))
                 f.append(f"{base},zoompan=z='1+{rate:.7f}*on':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=1:s={W}x{H}:fps={FPS},setsar=1,format=yuv420p[v{i}]")
@@ -171,8 +188,8 @@ def render_video(project: dict, scenes, durations: list[float], speech: list[flo
     enc_threads = ["-threads", str(nt)] if nt > 0 else []
     cmd = [settings.ffmpeg_path, "-y", "-hide_banner", "-nostats", "-progress", str((tmp / "progress.txt").resolve()),
            *threads, *args, "-filter_complex", ";".join(f), "-map", "[vout]", "-map", "[aout]", "-t", f"{total:.3f}",
-           *enc_threads, "-c:v", "libx264", "-preset", "veryfast", "-crf", "26", "-maxrate", "2200k", "-bufsize", "4400k",
-           "-pix_fmt", "yuv420p", "-r", str(FPS), "-c:a", "aac", "-b:a", "128k", "-movflags", "+faststart", str(out)]
+           *enc_threads, "-c:v", "libx264", "-preset", "veryfast", "-crf", _preset()["crf"], "-maxrate", _preset()["maxrate"], "-bufsize", _preset()["bufsize"],
+           "-pix_fmt", "yuv420p", "-r", str(FPS), "-c:a", "aac", "-b:a", _preset()["abitrate"], "-movflags", "+faststart", str(out)]
     if shutil.which(settings.ffmpeg_path) is None:
         raise PipelineError("FFmpeg isn't installed or isn't on PATH. Install it (https://ffmpeg.org) or set FFMPEG_PATH.")
     _run(cmd, pdir, tmp, total, check, on_progress)

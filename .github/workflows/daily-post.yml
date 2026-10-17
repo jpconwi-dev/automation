@@ -2,12 +2,17 @@ name: Daily Facebook post
 
 on:
   schedule:
-     - cron: "0 1,6 * * *"      # 9:00 AM and 2:00 PM Philippine time (UTC+8)
+    - cron: "0 1,6 * * *"    # UTC. 01:00 and 06:00 UTC = 9:00 AM and 2:00 PM in UTC+8 (Philippines).
   workflow_dispatch:           # lets you run it by hand from the Actions tab
     inputs:
       dry_run:
         description: "Make the video but do not post"
         default: "false"
+      quality:
+        description: "Video quality: standard (720p) or high (1080p)"
+        type: choice
+        options: [standard, high]
+        default: standard
 
 permissions:
   contents: write          # lets the job save the list of posted topics back to the repo
@@ -50,6 +55,7 @@ jobs:
           VIDEO_BACKEND: none
           FFMPEG_THREADS: "2"
           KEN_BURNS: "true"
+          VIDEO_QUALITY: ${{ github.event.inputs.quality || 'standard' }}   # scheduled runs use the word after || ; change it to high when you are happy
           MAX_CONCURRENT_JOBS: "1"
           MAX_QUEUE: "1"
           STORAGE_LIMIT_MB: "2000"
@@ -60,7 +66,7 @@ jobs:
           NICHE: ${{ vars.NICHE }}
           AUDIENCE: ${{ vars.AUDIENCE }}
           FB_MODE: reel                          # reel | video
-          FB_STATE: PUBLISHED                        # DRAFT for the first real test; change to PUBLISHED when it looks right
+          FB_STATE: DRAFT                        # DRAFT for the first real test; change to PUBLISHED when it looks right
           DRY_RUN: ${{ github.event.inputs.dry_run }}
         run: |
           cd backend

@@ -77,6 +77,7 @@ class Settings(BaseSettings):
     # Rendering
     ffmpeg_path: str = "ffmpeg"
     ken_burns: bool = True
+    video_quality: str = "standard"  # "standard" = 720p (the old look) | "high" = 1080p, sharper and bigger file. Env: VIDEO_QUALITY
     ffmpeg_threads: int = 0  # 0 = FFmpeg default. Use 1 on small servers: fewer threads means much less RAM
     music_path: Path | None = None
     render_timeout: int = 3600
