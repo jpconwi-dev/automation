@@ -184,6 +184,18 @@ def make_video(t: dict) -> tuple[pathlib.Path, dict]:
     return out, proj
 
 
+# ---------- 3a. make sure the token really belongs to the Page ----------
+def check_token():
+    r = httpx.get(f"{GRAPH}/me", params={"fields": "id,name", "access_token": PAGE_TOKEN}, timeout=30)
+    if r.status_code != 200:
+        sys.exit(f"FB_PAGE_TOKEN was rejected by Facebook ({r.status_code}): {r.text[:200]}")
+    me = r.json()
+    log(f"token belongs to: {me.get('name')} (id {me.get('id')}) | FB_PAGE_ID is {PAGE_ID}")
+    if str(me.get("id")) != str(PAGE_ID).strip():
+        sys.exit("FB_PAGE_TOKEN is not the Page token for FB_PAGE_ID. If the name above is a person, you saved a "
+                 "USER token. Get the Page token from me/accounts and update the FB_PAGE_TOKEN secret. Nothing was posted.")
+
+
 # ---------- 3. publish to the Facebook Page ----------
 def post_reel(path: pathlib.Path, caption: str, record):
     start = ok(httpx.post(f"{GRAPH}/{PAGE_ID}/video_reels",
@@ -217,6 +229,8 @@ def post_video(path: pathlib.Path, title: str, caption: str, record):
 
 
 def main():
+    if not DRY_RUN:
+        check_token()  # fail fast, before spending minutes on a video
     history = load_history()
     log(f"{len(history)} earlier posts on record")
     t = pick_topic(history)
