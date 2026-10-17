@@ -59,8 +59,8 @@ jobs:
           LLM_FALLBACK_MODELS: openai/gpt-oss-20b,llama-3.1-8b-instant
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          IMAGE_BACKEND: pexels                  # real moving stock footage (free key from pexels.com/api)
-          PEXELS_API_KEY: ${{ secrets.PEXELS_API_KEY }}
+          IMAGE_BACKEND: pixabay                 # real moving stock footage (free key from pixabay.com/api/docs)
+          PIXABAY_API_KEY: ${{ secrets.PIXABAY_API_KEY }}
           TTS_BACKEND: cloudflare
           VIDEO_BACKEND: none
           FFMPEG_THREADS: "2"
