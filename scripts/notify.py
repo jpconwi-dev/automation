@@ -135,6 +135,11 @@ def fb_message(text: str) -> str:
 
 # (pattern, short title, plain explanation of the cause, what to do)
 ERRORS = [
+    (r"^status failed|status failed \(",
+     "Reel sent, but its status could not be read",
+     "Facebook accepted the video. The step that came after, asking Facebook how far the processing is, was refused, "
+     "usually because the token cannot read video details. This is not a posting failure.",
+     "Check your Page to confirm the Reel appears. To stop the warning, use a Page token that has pages_read_engagement."),
     (r"allowance for today|daily free allocation|neurons",
      "Cloudflare free limit reached",
      "The voice (narration) is made with Cloudflare Workers AI. Your free allowance of 10,000 neurons for the day was already used up. "
