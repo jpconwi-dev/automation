@@ -272,6 +272,26 @@ def _make_layered(project: dict, scene, index: int, pdir: Path, seed: int) -> No
     Image.alpha_composite(still, txt).convert("RGB").save(pdir / f"{n}.png")  # still used for previews/thumbnails
 
 
+def _ai_scene_fallback(project: dict, script, scene, size: tuple[int, int], seed: int, index: int, pdir: Path) -> dict | None:
+    """When no stock clip matches a scene, draw a picture of it with Cloudflare FLUX (free daily allowance) so the
+    video never shows gradient shapes. Returns scene metadata, or None when AI is off or fails (placeholder then)."""
+    from . import cloudflare
+    if not settings.stock_ai_fallback or not cloudflare.configured():
+        return None
+    subject = (project.get("subject") or "").strip() or script.title
+    prompt = (f"Photorealistic nature documentary photograph of {subject}. {scene.visual_description}. "
+              "Sharp focus, natural light, high detail, realistic anatomy. No text, no letters, no watermark, no logo.")
+    try:
+        img = _generate_cloudflare(prompt, seed + index, size)
+    except Exception as e:  # noqa: BLE001  quota used up, network, bad reply: fall back to the placeholder
+        import logging
+        logging.getLogger("images").warning("AI picture for scene %s failed: %s", index, e)
+        return None
+    _overlay(img, scene.on_screen_text, None).save(pdir / f"scene_{index:02d}.png")
+    return {"ai_generated": True, "model": settings.cloudflare_image_model, "source": "ai",
+            "tags": f"AI picture of {subject}"}
+
+
 def make_scene_image(project: dict, script, scene, index: int, pdir: Path) -> dict:
     """Create scene_NN.png in pdir. Returns metadata, including whether it is AI-generated."""
     size = image_size(project["aspect_ratio"])
@@ -315,9 +335,13 @@ def make_scene_image(project: dict, script, scene, index: int, pdir: Path) -> di
         context = f"{scene.visual_description} {scene.on_screen_text} {scene.search_keywords}"
         meta = stock.fetch_clip(queries, project["aspect_ratio"], index, pdir / f"{n}_clip.mp4", pdir / f"{n}.png",
                                 context=context, must=must, alts=alts)
-        if meta is None:  # nothing matched: labeled animated placeholder for this scene only
+        if meta is None:  # nothing matched: draw a real picture of the scene instead of purple shapes
+            diag = stock.last_diag
+            ai = _ai_scene_fallback(project, script, scene, size, seed, index, pdir)
+            if ai is not None:
+                return {**ai, "note": f"no stock footage matched; AI picture used. {diag}"}
             _make_layered(project, scene, index, pdir, seed)
-            return {"ai_generated": False, "model": None, "note": f"no stock footage found; placeholder used. {stock.last_diag}"}
+            return {"ai_generated": False, "model": None, "note": f"no stock footage found; placeholder used. {diag}"}
         _text_layer((W, H), scene.on_screen_text, None).save(pdir / f"{n}_text.png")
         return meta
     elif settings.image_backend == "fallback":

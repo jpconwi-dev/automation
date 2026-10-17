@@ -70,6 +70,7 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           IMAGE_BACKEND: stock                   # several free footage sources, best match wins
           STOCK_PROVIDERS: nasa,wikimedia,archive,smithsonian,pixabay,pexels
+          STOCK_AI_FALLBACK: "true"              # no matching clip -> AI picture (Cloudflare FLUX), never gradient shapes
           STOCK_CONTACT: ${{ vars.STOCK_CONTACT }}                 # optional: your email, sent in the User-Agent
           SMITHSONIAN_API_KEY: ${{ secrets.SMITHSONIAN_API_KEY }}  # free: api.data.gov/signup (optional)
           PIXABAY_API_KEY: ${{ secrets.PIXABAY_API_KEY }}
