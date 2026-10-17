@@ -325,21 +325,56 @@ def _probe_duration(src) -> float:
     return int(m[1]) * 3600 + int(m[2]) * 60 + float(m[3]) if m else 0.0
 
 
+def _probe_size(src) -> tuple[int, int]:
+    """Width and height of the first video stream, from FFmpeg's banner. (0, 0) when unknown."""
+    try:
+        r = subprocess.run([settings.ffmpeg_path, "-hide_banner", "-i", str(src)], capture_output=True, text=True, timeout=60)
+    except (OSError, subprocess.SubprocessError):
+        return 0, 0
+    m = re.search(r"Video:.*?\b(\d{2,5})x(\d{2,5})\b", r.stderr or "")
+    return (int(m[1]), int(m[2])) if m else (0, 0)
+
+
+def frame_filter(sw: int, sh: int, W: int, H: int) -> str:
+    """How a source clip is fitted into the video frame.
+    Same shape as the frame (or FOOTAGE_FRAMING=fill): fill the frame and crop the edges.
+    Very different shape (e.g. 16:9 footage in a 9:16 Reel): a plain crop keeps only the middle third of the picture,
+    so animals and objects look huge and get cut off. Instead the clip is shown in a panel that keeps much more of
+    the picture, over a blurred, darkened copy of itself that fills the rest of the screen."""
+    fill = f"scale={W}:{H}:force_original_aspect_ratio=increase,crop={W}:{H},fps=24"
+    if settings.footage_framing != "smart" or not sw or not sh:
+        return fill
+    sar, oar = sw / sh, W / H
+    if max(sar / oar, oar / sar) < 1.3:
+        return fill
+    tar = (sar * oar) ** 0.5  # panel shape: halfway (geometric mean) between the clip's shape and the frame's
+    bw, bh = (W, W / tar) if sar > oar else (H * tar, H)
+    bw, bh = int(bw) // 2 * 2, int(bh) // 2 * 2
+    return (f"split[a][b];[a]scale={W}:{H}:force_original_aspect_ratio=increase,crop={W}:{H},gblur=sigma=28,eq=brightness=-0.12[bg];"
+            f"[b]scale={bw}:{bh}:force_original_aspect_ratio=increase,crop={bw}:{bh}[fg];"
+            f"[bg][fg]overlay=(main_w-overlay_w)/2:(main_h-overlay_h)/2,fps=24")
+
+
 def _shrink(src, dst, aspect: str) -> None:
     W, H = _preset()["dims"][aspect]
     total = _probe_duration(src)
     # Long films (Internet Archive, NASA) start with leaders and title cards: take the 16 s from about a third in.
     start = min(total * 0.33, total - 16) if total > 45 else 0
+    sw, sh = _probe_size(src)
     cmd = [settings.ffmpeg_path, "-y", "-v", "error", *(["-ss", f"{start:.2f}"] if start > 0 else []), "-i", str(src),
-           "-t", "16", "-an",
-           "-vf", f"scale={W}:{H}:force_original_aspect_ratio=increase,crop={W}:{H},fps=24",
+           "-t", "16", "-an", "-vf", frame_filter(sw, sh, W, H),
            "-c:v", "libx264", "-preset", "veryfast", "-crf", "27", "-pix_fmt", "yuv420p", str(dst)]
     try:
-        r = subprocess.run(cmd, capture_output=True, text=True, timeout=180)
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=240)
     except (OSError, subprocess.SubprocessError) as e:
         raise PipelineError(f"Couldn't process a stock clip: {e}")
     if r.returncode != 0:
         raise PipelineError(f"FFmpeg couldn't process a stock clip: {r.stderr[-300:]}")
+
+
+def has_subject(video: dict, must: set[str], alts: list[set[str]] | None) -> bool:
+    """True when the clip is tagged with every word of the subject, or every word of one of its other names."""
+    return has_all(video, must) or any(a and has_all(video, a) for a in (alts or []))
 
 
 def has_all(video: dict, must: set[str]) -> bool:
@@ -364,7 +399,7 @@ def _download(link: str, dl, provider: str) -> None:
 
 
 def fetch_clip(queries: list[str], aspect: str, index: int, clip_path, thumb_path, context: str = "",
-               must: set[str] | None = None) -> dict | None:
+               must: set[str] | None = None, alts: list[set[str]] | None = None) -> dict | None:
     """Download the best-matching unused clip from the active provider(s). Clips whose tags don't relate to the
     search are rejected, so a scene gets no footage (and a labeled placeholder) rather than unrelated footage.
     With several providers the best tag match wins; ties go to the source used least in this video, so a video
@@ -388,7 +423,7 @@ def fetch_clip(queries: list[str], aspect: str, index: int, clip_path, thumb_pat
                         key=lambda t: (-t[0], counts[t[1].get("provider", "")]))
         ranked = [(sc, v) for sc, v in ranked if sc >= 3]  # at least one search word must appear in the clip's tags
         if must:
-            ranked = [(sc, v) for sc, v in ranked if has_all(v, must)]  # and ALL subject words
+            ranked = [(sc, v) for sc, v in ranked if has_subject(v, must, alts)]  # and ALL words of the subject (or of an alias)
         for _, v in ranked[:4]:  # a candidate can fail (dead link, too big): try the next best one
             prov = v.get("provider", settings.image_backend)
             dl = settings.tmp_dir / f"dl_{pid}_{index}.mp4"

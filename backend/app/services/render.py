@@ -24,6 +24,9 @@ def _preset():
 
 
 SUB_SIZE = {"16:9": 13, "9:16": 8, "1:1": 11}
+# Subtitle margins in libass units (384x288 grid). For 9:16 the text sits above the username/caption/buttons that
+# Facebook and Instagram draw over the bottom ~25% of a Reel, and away from the sides that tall phones crop.
+SUB_MARGIN = {"16:9": "MarginV=22", "9:16": "MarginV=72,MarginL=40,MarginR=58", "1:1": "MarginV=22"}
 FPS, T = 24, 0.5  # frame rate, crossfade seconds
 
 
@@ -148,7 +151,7 @@ def render_video(project: dict, scenes, durations: list[float], speech: list[flo
     for k in range(1, n):
         f.append(f"[{last}][v{k}]xfade=transition=fade:duration={T}:offset={starts[k]:.3f}[x{k}]")
         last = f"x{k}"
-    style = f"Alignment=2,FontSize={SUB_SIZE[project['aspect_ratio']]},BorderStyle=3,Outline=1,Shadow=0,MarginV=22,PrimaryColour=&H00FFFFFF,BackColour=&H99000000"
+    style = f"Alignment=2,FontSize={SUB_SIZE[project['aspect_ratio']]},BorderStyle=3,Outline=1,Shadow=0,{SUB_MARGIN[project['aspect_ratio']]},PrimaryColour=&H00FFFFFF,BackColour=&H99000000"
     f.append(f"[{last}]subtitles=subtitles.srt:force_style='{style}'[vout]")
 
     a_idx = [add("-i", f"scene_{i + 1:02d}.wav") for i in range(n)]

@@ -92,6 +92,9 @@ class Settings(BaseSettings):
 
     # Rendering
     ffmpeg_path: str = "ffmpeg"
+    # "smart": footage whose shape differs a lot from the video (16:9 clip in a 9:16 Reel) is shown whole-ish over a
+    # blurred copy of itself instead of being cropped to its middle third. "fill": always crop to fill (old look).
+    footage_framing: str = "smart"
     ken_burns: bool = True
     video_quality: str = "standard"  # "standard" = 720p (the old look) | "high" = 1080p, sharper and bigger file. Env: VIDEO_QUALITY
     ffmpeg_threads: int = 0  # 0 = FFmpeg default. Use 1 on small servers: fewer threads means much less RAM

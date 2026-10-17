@@ -154,9 +154,55 @@ def _fallback(style: str, size: tuple[int, int], seed: int) -> Image.Image:
     return Image.alpha_composite(img.convert("RGBA"), layer).convert("RGB")
 
 
+def _wrap_px(d: ImageDraw.ImageDraw, text: str, font, max_w: float) -> list[str]:
+    lines, cur = [], ""
+    for word in text.split():
+        trial = f"{cur} {word}".strip()
+        if cur and d.textlength(trial, font=font) > max_w:
+            lines.append(cur)
+            cur = word
+        else:
+            cur = trial
+    return lines + ([cur] if cur else [])
+
+
+def _chip_portrait(layer: Image.Image, text: str) -> None:
+    """Caption chip for 9:16. Phones with tall screens (iPhone) crop the sides of a Reel and Facebook draws its own
+    buttons at the top and bottom, so the chip is centred, kept 11% in from each side and 14% below the top edge,
+    wrapped by real pixel width, and the font shrinks until it fits in 3 lines."""
+    w, h = layer.size
+    d = ImageDraw.Draw(layer)
+    pad, side, top = max(14, w // 50), int(w * 0.11), int(h * 0.14)
+    max_w = w - 2 * side - 2 * pad
+    size = max(20, w // 22)
+    while True:
+        font = _font(size)
+        lines = _wrap_px(d, text, font, max_w)
+        if (len(lines) <= 3 and all(d.textlength(l, font=font) <= max_w for l in lines)) or size <= 16:
+            break
+        size -= 2
+    lines = lines[:3]
+    tw = max(d.textlength(l, font=font) for l in lines)
+    lh = size * 1.25
+    x0 = (w - tw) / 2 - pad
+    d.rounded_rectangle([x0, top, x0 + tw + 2 * pad, top + 2 * pad + lh * len(lines) - pad * 0.5], radius=pad, fill=(10, 10, 14, 175))
+    for i, line in enumerate(lines):
+        d.text((x0 + pad, top + pad + i * lh), line, font=font, fill=(255, 255, 255, 255))
+
+
 def _text_layer(size: tuple[int, int], text: str, label: str | None) -> Image.Image:
     """Transparent RGBA layer with the on-screen caption chip (and placeholder label)."""
     w, h = size
+    if h > w * 1.2 and text.strip():
+        layer = Image.new("RGBA", size, (0, 0, 0, 0))
+        _chip_portrait(layer, text)
+        if label:
+            d = ImageDraw.Draw(layer)
+            f = _font(max(12, w // 60))
+            lw = d.textlength(label, font=f)
+            d.rounded_rectangle([w - lw - 26, 10, w - 10, 34], radius=8, fill=(10, 10, 14, 175))
+            d.text((w - lw - 18, 14), label, font=f, fill=(255, 190, 220, 255))
+        return layer
     layer = Image.new("RGBA", size, (0, 0, 0, 0))
     d = ImageDraw.Draw(layer)
     if text.strip():
@@ -258,9 +304,17 @@ def make_scene_image(project: dict, script, scene, index: int, pdir: Path) -> di
                       top(project.get("topic") or project.get("prompt", ""), 3)):
                 if q and q not in queries:
                     queries.append(q)
+        # Other names for the subject (snapping shrimp = pistol shrimp). Tried only after the subject's own name found
+        # nothing, and a clip must still be tagged with the full alias, so the footage can never be a different animal.
+        aliases = [a for a in (project.get("subject_aliases") or []) if stock.tokens(a)]
+        alts = [stock.tokens(a) for a in aliases] if must else None
+        for a in aliases if must else []:
+            for q in (a, f"{a} {top(scene.visual_description, 1)}".strip()):
+                if q not in queries:
+                    queries.append(q)
         context = f"{scene.visual_description} {scene.on_screen_text} {scene.search_keywords}"
         meta = stock.fetch_clip(queries, project["aspect_ratio"], index, pdir / f"{n}_clip.mp4", pdir / f"{n}.png",
-                                context=context, must=must)
+                                context=context, must=must, alts=alts)
         if meta is None:  # nothing matched: labeled animated placeholder for this scene only
             _make_layered(project, scene, index, pdir, seed)
             return {"ai_generated": False, "model": None, "note": "no stock footage found; placeholder used"}
@@ -268,7 +322,7 @@ def make_scene_image(project: dict, script, scene, index: int, pdir: Path) -> di
         return meta
     elif settings.image_backend == "fallback":
         _make_layered(project, scene, index, pdir, seed)
-        return {"ai_generated": False, "model": None}
+        return {"ai_generated": False, "model": None, "note": "placeholder graphic (IMAGE_BACKEND=fallback)"}
     else:
         raise PipelineError(f"Unknown IMAGE_BACKEND '{settings.image_backend}'. Use 'stock' (several free sources), 'pixabay', 'pexels', 'nasa', 'wikimedia', 'archive', 'smithsonian', 'cloudflare', 'hf_api', 'diffusers' or 'fallback'.")
     _overlay(img, scene.on_screen_text, label).save(pdir / name)

@@ -28,6 +28,19 @@ class ProjectCreate(BaseModel):
     music_style: MusicStyle = "auto"
     sound_effects: bool = True
     subject: str = Field(default="", max_length=80)  # the exact thing the footage must show, e.g. "black bear"
+    # Other names for the same subject, e.g. ["snapping shrimp", "alpheidae"] for "pistol shrimp". A clip tagged with
+    # ANY of these counts as the right subject, so a niche subject still finds real footage (never unrelated footage).
+    subject_aliases: list[str] = Field(default_factory=list, max_length=6)
+
+    @field_validator("subject_aliases")
+    @classmethod
+    def tidy_aliases(cls, v: list[str]) -> list[str]:
+        out = []
+        for a in v:
+            a = " ".join(str(a).split())[:40]
+            if a and a.lower() not in [x.lower() for x in out]:
+                out.append(a)
+        return out
 
     @field_validator("topic", "audience", "prompt", "subject")
     @classmethod

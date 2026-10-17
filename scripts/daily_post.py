@@ -164,6 +164,26 @@ def derive_subject(topic: str) -> str:
     return clean_subject((d or {}).get("subject", ""))
 
 
+def subject_aliases(subject: str, topic: str) -> list[str]:
+    """Other names stock sites might tag the same thing with (pistol shrimp -> snapping shrimp, alpheidae).
+    Footage is only accepted if it is tagged with the full subject OR one full alias, so this widens the search
+    without ever allowing a different animal or object."""
+    if not subject:
+        return []
+    d = llm_json("You help find stock footage. Reply with JSON only.",
+                 f'Topic: "{topic}". Main subject: "{subject}". List up to 4 OTHER names for exactly this same thing that '
+                 'video sites, Wikipedia or museums use as tags: common alternate names, plural or singular forms, and the '
+                 'scientific name if it is an animal or plant. Each is 1 to 3 words. Never list a related but different '
+                 'thing (a different species, a bigger category, a similar object). If there are none, return an empty list. '
+                 'JSON: {"aliases": ["..."]}', 0.1)
+    out = []
+    for a in (d or {}).get("aliases") or []:
+        a = clean_subject(str(a))
+        if a and a != subject and a not in out and not set(a.split()) < set(subject.split()):
+            out.append(a)  # a strict subset of the subject words ("shrimp" for "pistol shrimp") would be too broad
+    return out[:4]
+
+
 def parse_topic_line(line: str) -> dict:
     """'topic | subject' or just 'topic' (subject is then worked out automatically)."""
     topic, _, subj = line.partition("|")
@@ -304,7 +324,7 @@ def make_video(t: dict, duration: int) -> tuple[pathlib.Path, dict]:
     body = {
         "mode": "explainer", "topic": t["topic"][:500], "audience": t["audience"][:200],
         "style": STYLE, "duration": duration, "language": "en-us",
-        "aspect_ratio": FB_ASPECT, "subject": t.get("subject", ""),
+        "aspect_ratio": FB_ASPECT, "subject": t.get("subject", ""), "subject_aliases": t.get("aliases", []),
         "tone": TONE, "voice": "auto", "voice_speed": 1.0,
         "background_music": True, "music_style": MUSIC_STYLE, "sound_effects": True,
     }
@@ -407,6 +427,9 @@ def main():
     as_reel = FB_MODE in ("reel", "auto") and duration <= 90  # Facebook Reels must be 3 to 90 seconds
     log(f"topic: {t['topic']} | subject: {t.get('subject') or '-'} | {duration}s | {'reel' if as_reel else 'normal video'}")
     R.update(topic=t["topic"], subject=t.get("subject", ""), duration_s=duration, format="Reel" if as_reel else "Normal video")
+    t["aliases"] = subject_aliases(t.get("subject", ""), t["topic"])
+    if t["aliases"]:
+        log("other names for the subject:", ", ".join(t["aliases"]))
     R["stage"] = "making the video (voice, footage, music)"
     wake_backend()
     t0 = time.time()
@@ -417,7 +440,9 @@ def main():
     R["scenes"] = [{"scene": k, "footage": str(v.get("tags") or v.get("note") or "-")[:90]} for k, v in sorted(meta.items())]
     for k, v in sorted(meta.items()):  # shows what footage each scene got, so you can check it matches the subject
         log(f"  {k}: {v.get('tags') or v.get('note') or '-'}")
-    gaps = [k for k, v in meta.items() if "placeholder" in json.dumps(v).lower()]
+    # A scene is real footage only when a stock source supplied it (or AI made it). Anything else is a placeholder
+    # graphic, whichever backend produced it, and a video with one must never be posted.
+    gaps = [k for k, v in meta.items() if not v.get("source") and not v.get("ai_generated")]
     if gaps and not DRY_RUN:
         sys.exit(f"{len(gaps)} scene(s) found no matching footage and would show a placeholder graphic. "
                  "Not posting this one; the topic is not used up, so the next run picks again.")

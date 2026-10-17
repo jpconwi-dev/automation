@@ -69,7 +69,7 @@ def fake_voice(text, language, out_path, voice="auto", speed=1.0):  # 22.05 kHz 
 tts.synthesize = fake_voice
 
 
-def fake_fetch(queries, aspect, index, clip_path, thumb_path, context="", must=None):
+def fake_fetch(queries, aspect, index, clip_path, thumb_path, context="", must=None, alts=None):
     if index == 3:
         return None  # exercise the labeled-placeholder path
     subprocess.run(["ffmpeg", "-y", "-v", "error", "-f", "lavfi", "-i", "testsrc2=size=640x360:rate=30:duration=2",
@@ -344,3 +344,69 @@ def test_credit_line_goes_above_hashtags():
     cap = ns["add_credits"]("Title\n\nBody text?\n\n#a #b", {"scene_01.png": {"credit_required": True, "credit": "Jane / Wikimedia Commons (CC BY 4.0)"},
                                                             "scene_02.png": {"credit_required": False, "credit": "NASA"}})
     assert cap.splitlines()[-1] == "#a #b" and "Footage: Jane / Wikimedia Commons (CC BY 4.0)" in cap and "NASA" not in cap
+
+
+# ---------- aliases, framing, phone-safe text ----------
+def test_alias_match_never_accepts_a_different_animal(monkeypatch):
+    must, alts = stock.tokens("pistol shrimp"), [stock.tokens("snapping shrimp")]
+    snapping = {"tags": "snapping shrimp, coral reef"}
+    other = {"tags": "mantis shrimp, coral reef"}          # a different animal that shares the word 'shrimp'
+    assert stock.has_subject(snapping, must, alts) and not stock.has_subject(other, must, alts)
+    assert stock.has_subject({"tags": "pistol shrimp"}, must, alts) and not stock.has_subject(snapping, must, None)
+
+
+def test_fetch_clip_uses_alias_when_subject_name_finds_nothing(monkeypatch):
+    seen = []
+    hit = {"id": "w1", "provider": "wikimedia", "files": [], "thumb": None, "page": "p", "tags": "snapping shrimp reef"}
+
+    def fake_search(q, a):
+        seen.append(q)
+        return [dict(hit)] if "snapping" in q else []
+    monkeypatch.setattr(stock, "_search", fake_search)
+    monkeypatch.setattr(stock, "_download", lambda *a, **k: (_ for _ in ()).throw(stock.PipelineError("stop here")))
+    d = Path(tempfile.mkdtemp()) / "p"; d.mkdir()
+    r = _real_fetch(["pistol shrimp", "snapping shrimp"], "9:16", 1, d / "c.mp4", d / "t.png",
+                    must=stock.tokens("pistol shrimp"), alts=[stock.tokens("snapping shrimp")])
+    assert r is None and "snapping shrimp" in seen  # the alias clip was found and tried (download stubbed to fail)
+
+
+def test_frame_filter_modes():
+    f = stock.frame_filter(1280, 720, 720, 1280)            # 16:9 footage into a 9:16 Reel
+    assert "gblur" in f and "scale=720:720" in f            # panel keeps a square-ish part of the picture
+    assert "gblur" not in stock.frame_filter(720, 1280, 720, 1280)    # already the right shape: plain fill
+    assert "gblur" not in stock.frame_filter(0, 0, 720, 1280)         # unknown size: plain fill
+    old = settings.footage_framing
+    try:
+        settings.footage_framing = "fill"
+        assert "gblur" not in stock.frame_filter(1280, 720, 720, 1280)
+    finally:
+        settings.footage_framing = old
+
+
+def test_portrait_caption_stays_in_phone_safe_area():
+    from app.services import images
+    W, H = 720, 1280
+    for text in ("Pistol shrimp readies its claw to snap", "Hi", "An extremely long caption that keeps going and going " * 3):
+        layer = images._text_layer((W, H), text, None)
+        x0, y0, x1, y1 = layer.getchannel("A").getbbox()
+        assert x0 >= W * 0.06 and x1 <= W * 0.94 and y0 >= H * 0.13, (text[:20], (x0, y0, x1, y1))
+        assert abs((x0 + x1) / 2 - W / 2) < 6  # centred, so a tall phone's side crop cuts both sides equally
+
+
+def test_daily_post_guard_and_aliases(monkeypatch):
+    import importlib.util, pathlib
+    path = pathlib.Path(__file__).parents[2] / "scripts" / "daily_post.py"
+    src = path.read_text(encoding="utf-8")
+    ns = {"re": re, "log": lambda *a: None}
+    for name in ("clean_subject", "subject_aliases"):
+        a = src.index(f"def {name}"); b = src.index("\ndef ", a + 5)
+        exec(src[a:b], ns)
+    ns["FILLER"] = set()
+    ns["llm_json"] = lambda *a, **k: {"aliases": ["Snapping Shrimp", "shrimp", "pistol shrimp", "Alpheidae", "snapping shrimp"]}
+    # 'shrimp' is too broad (subset of the subject), the subject itself and duplicates are dropped
+    assert ns["subject_aliases"]("pistol shrimp", "x") == ["snapping shrimp", "alpheidae"]
+    assert ns["subject_aliases"]("", "x") == []
+    # guard: a scene without a stock source and without AI is a placeholder, whichever backend made it
+    meta = {"a": {"source": "nasa"}, "b": {"ai_generated": False, "model": None, "note": "placeholder graphic (IMAGE_BACKEND=fallback)"},
+            "c": {"ai_generated": True}}
+    assert [k for k, v in meta.items() if not v.get("source") and not v.get("ai_generated")] == ["b"]
