@@ -69,7 +69,7 @@ def fake_voice(text, language, out_path, voice="auto", speed=1.0):  # 22.05 kHz 
 tts.synthesize = fake_voice
 
 
-def fake_fetch(queries, aspect, index, clip_path, thumb_path, context=""):
+def fake_fetch(queries, aspect, index, clip_path, thumb_path, context="", must=None):
     if index == 3:
         return None  # exercise the labeled-placeholder path
     subprocess.run(["ffmpeg", "-y", "-v", "error", "-f", "lavfi", "-i", "testsrc2=size=640x360:rate=30:duration=2",
@@ -251,3 +251,96 @@ def test_ai_video_clip_is_rendered_into_the_final_video(monkeypatch):
         assets = {a["name"]: a for a in c.get(f"/api/projects/{p['id']}/assets").json()["assets"]}
         assert c.get(f"/api/projects/{p['id']}/video").status_code == 200
     assert assets["scene_01.png"]["ai_generated"] is True and assets["scene_01.png"]["kind"] == "video"
+
+
+# ---------- extra footage sources (mocked: no network) ----------
+def _fake_http(monkeypatch, routes):
+    """Route httpx.get by URL substring to canned JSON."""
+    import httpx
+
+    class R:
+        status_code = 200
+        def __init__(self, body): self._b = body
+        def json(self): return self._b
+
+    def get(url, **k):
+        for key, body in routes.items():
+            if key in url:
+                return R(body)
+        raise AssertionError(f"unexpected request {url}")
+    monkeypatch.setattr(httpx, "get", get)
+
+
+def test_nasa_parsing(monkeypatch):
+    _fake_http(monkeypatch, {
+        "/search": {"collection": {"items": [{"data": [{"nasa_id": "apollo 11", "title": "Apollo 11 launch", "keywords": ["moon", "rocket"],
+                                                          "media_type": "video", "center": "KSC"}],
+                                              "links": [{"href": "https://t/x.jpg", "render": "image"}]}]}},
+        "/asset/": {"collection": {"items": [{"href": "http://a/apollo~orig.mp4"}, {"href": "http://a/apollo~medium.mp4"},
+                                             {"href": "http://a/apollo~small.mp4"}, {"href": "http://a/apollo.srt"}]}}})
+    res = stock._nasa("moon launch unique-nasa", "16:9")
+    assert res[0]["id"] == "nasaapollo 11" and "moon" in res[0]["tags"]
+    files = res[0]["files"]()
+    assert [f["width"] for f in files] == [960, 640] and files[0]["link"].startswith("https://")  # orig skipped, https forced
+
+
+def test_wikimedia_license_filter_and_credit(monkeypatch):
+    def page(pid, lic, title):
+        return {"pageid": pid, "title": f"File:{title}.webm", "videoinfo": [{
+            "url": "https://u/f.webm", "mime": "video/webm", "width": 1280, "height": 720, "size": 1000, "thumburl": "https://u/t.jpg",
+            "derivatives": [{"src": "https://u/f.720p.webm", "type": "video/webm; codecs=vp9", "width": 1280, "height": 720}],
+            "extmetadata": {"LicenseShortName": {"value": lic}, "Artist": {"value": "<a href='x'>Jane</a>"},
+                            "Categories": {"value": "Volcanoes|Lava"}}}]}
+    _fake_http(monkeypatch, {"commons.wikimedia.org": {"query": {"pages": {
+        "1": page(1, "CC BY 4.0", "Lava_flow"), "2": page(2, "CC BY-NC 2.0", "Lava_nc"),
+        "3": page(3, "CC BY-SA 3.0", "Lava_sa"), "4": page(4, "Public domain", "Lava_pd")}}}})
+    res = stock._wikimedia("lava unique-wiki", "16:9")
+    assert sorted(v["id"] for v in res) == ["wikimedia1", "wikimedia4"]  # NC and share-alike are dropped by default
+    by = next(v for v in res if v["id"] == "wikimedia1")
+    assert by["credit_required"] and "Jane" in by["credit"] and "<" not in by["credit"] and "lava" in by["tags"].lower()
+
+
+def test_archive_and_smithsonian_parsing(monkeypatch):
+    _fake_http(monkeypatch, {
+        "advancedsearch.php": {"response": {"docs": [{"identifier": "volcano_film", "title": "Volcano eruption film", "subject": ["lava", "volcano"]}]}},
+        "/metadata/": {"files": [{"name": "v.mp4", "size": "5000000", "width": "640", "height": "480"},
+                                 {"name": "big.mp4", "size": str(900 * 1024 * 1024)}, {"name": "v.ogv", "size": "10"}]},
+        "api.si.edu": {"response": {"rows": [
+            {"id": "edanmdm:1", "content": {"descriptiveNonRepeating": {"title": {"content": "Volcano lab film"}, "record_link": "https://si/1",
+                                                                         "online_media": {"media": [{"type": "Videos", "content": "https://si/v.mp4", "thumbnail": "https://si/t.jpg", "usage": {"access": "CC0"}}]}},
+                                            "indexedStructured": {"topic": ["Volcanoes"]}}},
+            {"id": "edanmdm:2", "content": {"descriptiveNonRepeating": {"title": {"content": "Not free"},
+                                                                         "online_media": {"media": [{"type": "Videos", "content": "https://si/n.mp4", "usage": {"access": "Restricted"}}]}}}}]}}})
+    a = stock._archive("volcano eruption unique-archive", "16:9")
+    assert a[0]["id"] == "archivevolcano_film" and [f["link"].rsplit("/", 1)[-1] for f in a[0]["files"]()] == ["v.mp4"]
+    s = stock._smithsonian("volcano unique-si", "16:9")
+    assert [v["id"] for v in s] == ["smithsonianedanmdm:1"] and "volcanoes" in s[0]["tags"].lower()
+
+
+def test_stock_mode_skips_failing_and_keyless_providers(monkeypatch):
+    from app.core.errors import PipelineError
+    monkeypatch.setattr(settings, "image_backend", "stock")
+    monkeypatch.setattr(settings, "stock_providers", "nasa,pixabay,wikimedia,bogus")
+    monkeypatch.setattr(settings, "pixabay_api_key", None)
+
+    def boom(q, a): raise PipelineError("NASA is down")
+    ok = {"id": "wikimedia9", "files": [{"link": "x", "width": 1280, "height": 720}], "thumb": None, "page": "p", "tags": "lava volcano"}
+    monkeypatch.setattr(stock, "_nasa", boom)
+    monkeypatch.setattr(stock, "_wikimedia", lambda q, a: [dict(ok)])
+    res = stock._search("lava", "16:9")
+    assert [v["id"] for v in res] == ["wikimedia9"] and res[0]["provider"] == "wikimedia"
+    monkeypatch.setattr(settings, "image_backend", "nasa")  # a single provider still reports its error
+    with pytest.raises(PipelineError):
+        stock._search("lava", "16:9")
+
+
+def test_credit_line_goes_above_hashtags():
+    import importlib.util, pathlib
+    spec = importlib.util.spec_from_file_location("daily_post", pathlib.Path(__file__).parents[2] / "scripts" / "daily_post.py")
+    src = spec.loader.get_source("daily_post")
+    ns = {}
+    start = src.index("def add_credits"); end = src.index("def build_caption")
+    exec(src[start:end], ns)
+    cap = ns["add_credits"]("Title\n\nBody text?\n\n#a #b", {"scene_01.png": {"credit_required": True, "credit": "Jane / Wikimedia Commons (CC BY 4.0)"},
+                                                            "scene_02.png": {"credit_required": False, "credit": "NASA"}})
+    assert cap.splitlines()[-1] == "#a #b" and "Footage: Jane / Wikimedia Commons (CC BY 4.0)" in cap and "NASA" not in cap

@@ -191,6 +191,17 @@ def hashtag_list(raw: list, t: dict) -> list[str]:
     return tags[:6]
 
 
+def add_credits(caption: str, meta: dict) -> str:
+    """Footage that requires attribution (e.g. Wikimedia CC BY) gets a credit line just above the hashtags."""
+    credits = sorted({v["credit"] for v in meta.values() if v.get("credit_required") and v.get("credit")})
+    if not credits:
+        return caption
+    line = "Footage: " + "; ".join(credits)
+    blocks = caption.split("\n\n")
+    blocks.insert(max(len(blocks) - 1, 1), line)
+    return "\n\n".join(blocks)
+
+
 def build_caption(t: dict, proj: dict) -> tuple[str, str]:
     """Search-friendly title + caption + hashtags. Never mentions AI."""
     sc = proj.get("script") or {}
@@ -414,6 +425,7 @@ def main():
         log(f"WARNING: {len(gaps)} scene(s) have no matching footage (a real run would not post this video)")
     R["stage"] = "writing the title, caption and hashtags"
     title, caption = build_caption(t, proj)
+    caption = add_credits(caption, meta)
     log("caption:\n" + caption)
     R.update(title=title, caption=caption, hashtags=re.findall(r"#\w+", caption.splitlines()[-1] if caption else ""))
     if DRY_RUN:

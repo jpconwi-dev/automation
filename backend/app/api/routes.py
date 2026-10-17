@@ -81,6 +81,20 @@ def health():
         deps["images"] = {"ok": bool(settings.pixabay_api_key), "detail": "Pixabay stock video" if settings.pixabay_api_key else "PIXABAY_API_KEY missing in backend/.env (free: pixabay.com/api/docs)"}
     elif settings.image_backend == "pexels":
         deps["images"] = {"ok": bool(settings.pexels_api_key), "detail": "Pexels stock video" if settings.pexels_api_key else "PEXELS_API_KEY missing in backend/.env (free at pexels.com/api)"}
+    elif settings.image_backend == "stock" or settings.image_backend in ("nasa", "wikimedia", "archive", "smithsonian"):
+        from ..services import stock
+        names = stock.active_providers()
+        bad = [n for n in names if n not in stock.PROVIDER_NAMES]
+        keyless = [n for n in names if n in stock._KEYED and not stock._KEYED[n]()]
+        ready = [n for n in names if n not in bad and n not in keyless]
+        detail = "stock footage from " + (", ".join(ready) or "nothing")
+        if keyless:
+            detail += f" (no key, skipped: {', '.join(keyless)})"
+        if bad:
+            detail += f" (unknown: {', '.join(bad)})"
+        if "smithsonian" in ready and not settings.smithsonian_api_key:
+            detail += " (smithsonian uses DEMO_KEY: get a free key at api.data.gov/signup)"
+        deps["images"] = {"ok": bool(ready) and not bad, "detail": detail}
     elif settings.image_backend == "diffusers":
         ok = importlib.util.find_spec("diffusers") is not None
         deps["images"] = {"ok": ok, "detail": f"diffusers: {settings.image_model}" if ok else "diffusers not installed (requirements-ai.txt)"}

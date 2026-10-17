@@ -21,6 +21,11 @@ ACCENTS = [(255, 77, 157), (217, 70, 239), (139, 92, 246), (56, 189, 248)]
 _pipe = None
 
 
+def _is_stock(backend: str) -> bool:
+    from .stock import is_stock_backend
+    return is_stock_backend(backend)
+
+
 def image_size(aspect: str) -> tuple[int, int]:
     m = settings.image_max_side
     r = lambda v: max(256, int(v) // 16 * 16)
@@ -231,7 +236,7 @@ def make_scene_image(project: dict, script, scene, index: int, pdir: Path) -> di
                   "No text, no letters, no watermark.")
         gen = {"hf_api": _generate_hf, "cloudflare": _generate_cloudflare}.get(settings.image_backend, _generate_ai)
         img, ai, label = gen(prompt, seed, size), True, None
-    elif settings.image_backend in ("pexels", "pixabay"):
+    elif _is_stock(settings.image_backend):
         from . import stock
         from .render import DIMS
         W, H = DIMS[project["aspect_ratio"]]
@@ -265,7 +270,7 @@ def make_scene_image(project: dict, script, scene, index: int, pdir: Path) -> di
         _make_layered(project, scene, index, pdir, seed)
         return {"ai_generated": False, "model": None}
     else:
-        raise PipelineError(f"Unknown IMAGE_BACKEND '{settings.image_backend}'. Use 'cloudflare', 'pixabay', 'pexels', 'hf_api', 'diffusers' or 'fallback'.")
+        raise PipelineError(f"Unknown IMAGE_BACKEND '{settings.image_backend}'. Use 'stock' (several free sources), 'pixabay', 'pexels', 'nasa', 'wikimedia', 'archive', 'smithsonian', 'cloudflare', 'hf_api', 'diffusers' or 'fallback'.")
     _overlay(img, scene.on_screen_text, label).save(pdir / name)
     model = {"hf_api": settings.hf_image_model, "cloudflare": settings.cloudflare_image_model}.get(
         settings.image_backend, settings.image_model)

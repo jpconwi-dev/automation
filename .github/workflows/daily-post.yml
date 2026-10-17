@@ -68,8 +68,12 @@ jobs:
           LLM_FALLBACK_MODELS: openai/gpt-oss-20b,llama-3.1-8b-instant
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          IMAGE_BACKEND: pixabay                 # real moving stock footage (free key from pixabay.com/api/docs)
+          IMAGE_BACKEND: stock                   # several free footage sources, best match wins
+          STOCK_PROVIDERS: nasa,wikimedia,archive,smithsonian,pixabay,pexels
+          STOCK_CONTACT: ${{ vars.STOCK_CONTACT }}                 # optional: your email, sent in the User-Agent
+          SMITHSONIAN_API_KEY: ${{ secrets.SMITHSONIAN_API_KEY }}  # free: api.data.gov/signup (optional)
           PIXABAY_API_KEY: ${{ secrets.PIXABAY_API_KEY }}
+          PEXELS_API_KEY: ${{ secrets.PEXELS_API_KEY }}            # optional
           TTS_BACKEND: cloudflare
           TTS_FALLBACK: kokoro                   # if the free Cloudflare voice allowance runs out, narrate with Kokoro instead
           TTS_FALLBACK_INSTALL: "true"            # lets the run install Kokoro by itself, only on days it is needed

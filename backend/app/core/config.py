@@ -73,6 +73,19 @@ class Settings(BaseSettings):
     pixabay_api_key: str | None = None
     pixabay_base_url: str = "https://pixabay.com/api"
 
+    # More footage sources. Use IMAGE_BACKEND=stock and list the ones you want in STOCK_PROVIDERS.
+    # A source that fails or has no key is skipped; the best tag match across all of them wins.
+    stock_providers: str = "nasa,wikimedia,archive,smithsonian,pixabay,pexels"
+    stock_contact: str = ""  # your email or site; sent in the User-Agent (Wikimedia and archive.org ask for it)
+    nasa_base_url: str = "https://images-api.nasa.gov"  # NASA Image and Video Library, no key
+    wikimedia_api_url: str = "https://commons.wikimedia.org/w/api.php"  # no key
+    # Licences accepted from Commons: pd, cc0, by (credit is added to the caption), by-sa (off by default: share-alike)
+    wikimedia_licenses: str = "pd,cc0,by"
+    archive_base_url: str = "https://archive.org"  # Internet Archive, no key
+    archive_collections: str = "prelinger,nasa"  # public-domain collections only; add more at your own risk
+    smithsonian_base_url: str = "https://api.si.edu/openaccess/api/v1.0"
+    smithsonian_api_key: str | None = None  # free: https://api.data.gov/signup/ (blank = DEMO_KEY, very limited)
+
     # Narration: "cloudflare" (free MeloTTS, no local model), "windows" (built-in Windows voices), "kokoro", or "none"
     tts_backend: str = "kokoro"
     windows_voice: str | None = None  # optional exact voice name, e.g. "Microsoft Zira Desktop"
