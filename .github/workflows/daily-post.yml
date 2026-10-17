@@ -117,4 +117,4 @@ jobs:
           name: daily-video
           path: video.mp4
           if-no-files-found: ignore
-          retention-days: 3
+          retention-days: 2
