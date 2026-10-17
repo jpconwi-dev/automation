@@ -94,8 +94,11 @@ def _pexels(query: str, aspect: str) -> list[dict]:
         files = [{"link": f["link"], "width": f["width"], "height": f["height"]} for f in v.get("video_files", [])
                  if f.get("file_type") == "video/mp4" and f.get("width") and f.get("height") and f.get("link")]
         if files:
+            who = ((v.get("user") or {}).get("name") or "").strip()
             out.append({"id": f"pexels{v['id']}", "files": files, "thumb": v.get("image"), "page": v.get("url"),
-                        "tags": (v.get("url") or "").rstrip("/").rsplit("/", 1)[-1].replace("-", " ")})
+                        "tags": (v.get("url") or "").rstrip("/").rsplit("/", 1)[-1].replace("-", " "),
+                        # Pexels API terms: show a link/credit to Pexels wherever its videos appear
+                        "credit": f"{who} / Pexels (pexels.com)" if who else "Pexels (pexels.com)", "credit_required": True})
     return out
 
 
