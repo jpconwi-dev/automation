@@ -25,6 +25,7 @@ PRINT_ONLY = os.environ.get("NOTIFY_PRINT") == "1"
 
 RESULT = pathlib.Path(os.environ.get("RESULT_FILE", "result.json"))
 LOG = pathlib.Path(os.environ.get("RUN_LOG", "run.log"))
+YT_RESULT = pathlib.Path(os.environ.get("YT_RESULT_FILE", "youtube.json"))
 
 
 def load_result() -> dict:
@@ -32,6 +33,59 @@ def load_result() -> dict:
         return json.loads(RESULT.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return {}
+
+
+def load_youtube() -> dict:
+    try:
+        return json.loads(YT_RESULT.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+
+
+# YouTube error reason -> (title, cause, what to do)
+YT_ERRORS = {
+    "invalid_grant": ("YouTube login expired", "Google no longer accepts the saved YouTube token. This happens if the Google app is still in "
+                      "'Testing' mode (tokens last about 7 days), or if access was removed.",
+                      "Set the OAuth app to 'In production', create a new refresh token and update the YT_REFRESH_TOKEN secret."),
+    "invalid_client": ("YouTube client details wrong", "The client ID or client secret was not accepted.",
+                       "Check the YT_CLIENT_ID and YT_CLIENT_SECRET secrets."),
+    "unauthorized_client": ("YouTube client not allowed", "This Google client is not allowed to use that token.",
+                            "Create the token again with the same client ID and secret that are saved in GitHub."),
+    "quotaExceeded": ("YouTube daily limit reached", "The Google project used up its daily YouTube quota (an upload costs 1,600 units).",
+                      "It resets at midnight Pacific time. Request a quota extension if you need more uploads."),
+    "uploadLimitExceeded": ("YouTube upload limit reached", "The channel hit YouTube's daily upload limit.",
+                            "Try again later; verifying the channel with a phone number can raise the limit."),
+    "forbidden": ("YouTube refused the upload", "The token may be missing the upload permission, or the channel cannot upload.",
+                  "Create the token again and tick the youtube.upload permission."),
+    "insufficientPermissions": ("YouTube permission missing", "The token does not have the youtube.upload permission.",
+                                "Create the token again and tick the youtube.upload permission."),
+    "youtubeSignupRequired": ("No YouTube channel", "The Google account used has no YouTube channel.",
+                              "Create the channel on youtube.com, then create the token again."),
+    "network": ("Could not reach Google", "The runner could not connect to Google.", "Nothing to do; the next run will try again."),
+    "nofile": ("Video file missing", "There was no video file to upload.", "Open the run log to see why the video was not made."),
+}
+
+
+def youtube_lines(y: dict) -> list:
+    if not y:
+        return []
+    out = [""]
+    if y.get("ok"):
+        want, got = y.get("privacy_requested"), y.get("privacy_actual")
+        if got and want and got != want:
+            out += [f"▶️ YouTube: uploaded, but YouTube set it to {got.upper()} instead of {want}.",
+                    "Cause: your Google project has not passed YouTube's audit yet, so uploads stay private.",
+                    "What to do: make the video public by hand in YouTube Studio, or finish the audit request.",
+                    f"Link: {y.get('url', '')}"]
+        else:
+            out += [f"▶️ YouTube: uploaded as a Short ({got or want or 'unknown'}).",
+                    f"Title: {y.get('title', '-')}", f"Link: {y.get('url', '')}"]
+    else:
+        title, cause, fix = YT_ERRORS.get(y.get("reason", ""), ("YouTube upload failed", "YouTube did not accept the upload.",
+                                                               "Open the run log for the full message."))
+        out += [f"⚠️ YouTube upload failed: {title}", f"Cause: {cause}", f"What to do: {fix}",
+                "Technical detail: " + hide_secrets(y.get("error", ""))[:300]]
+    return out
 
 
 def load_log() -> str:
@@ -207,6 +261,7 @@ def build() -> str:
         out.append("The video was made but NOT posted to Facebook.")
         out.append(f"When: {when(end)}")
         add_details(out, r, total, posted, show_fb=False)
+        out += youtube_lines(load_youtube())
         if "WARNING" in log:
             out.append("")
             out.append("⚠️ Some scenes have no matching footage. A real run would not post this video.")
@@ -218,6 +273,7 @@ def build() -> str:
         if r.get("page_name"):
             out.append(f"Page: {r['page_name']}")
         add_details(out, r, total, posted, show_fb=True)
+        out += youtube_lines(load_youtube())
     else:
         out.append("ℹ️ The run finished but I could not confirm a post. Please open the run and check.")
         out.append(f"When: {when(end or start)}")

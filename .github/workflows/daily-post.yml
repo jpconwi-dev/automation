@@ -23,6 +23,9 @@ on:
         type: choice
         options: [cinematic, epic, upbeat, calm, playful]
         default: cinematic
+      youtube_test:
+        description: "With dry_run = true, also upload to YouTube as PRIVATE to test the connection"
+        default: "false"
       topic:
         description: "Optional: force a topic, e.g. black bear   (or: topic | subject)"
         required: false
@@ -101,6 +104,21 @@ jobs:
           done
           set -o pipefail
           python scripts/daily_post.py 2>&1 | tee run.log
+
+      - name: Upload the same video to YouTube
+        id: youtube
+        if: steps.post.outcome == 'success' && (github.event.inputs.dry_run != 'true' || github.event.inputs.youtube_test == 'true')
+        continue-on-error: true          # a YouTube problem must never turn the Facebook post into a failed run
+        env:
+          YT_CLIENT_ID: ${{ secrets.YT_CLIENT_ID }}
+          YT_CLIENT_SECRET: ${{ secrets.YT_CLIENT_SECRET }}
+          YT_REFRESH_TOKEN: ${{ secrets.YT_REFRESH_TOKEN }}
+          YT_PRIVACY: ${{ github.event.inputs.dry_run == 'true' && 'private' || (vars.YT_PRIVACY || 'public') }}
+        run: |
+          python scripts/youtube_upload.py 2>&1 | tee -a run.log
+          rc=${PIPESTATUS[0]}
+          if [ "$rc" = "2" ]; then exit 0; fi   # 2 = no YouTube secrets set yet, simply skip
+          exit "$rc"
 
       - name: Backend log (only when something failed)
         if: failure()
