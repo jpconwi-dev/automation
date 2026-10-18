@@ -7,7 +7,7 @@ from ..core.config import settings
 from ..core.errors import PipelineError
 from ..schemas.schemas import Script  # noqa: E402
 
-SCENE_COUNT = {30: 4, 60: 6, 90: 8, 120: 10, 300: 18}
+SCENE_COUNT = {30: 7, 60: 12, 90: 18, 120: 22, 300: 55}  # a new shot every ~4-5 seconds keeps short videos moving
 LANG_NAMES = {"en-us": "American English", "en-gb": "British English", "es": "Spanish", "fr": "French",
               "hi": "Hindi", "it": "Italian", "ja": "Japanese", "pt-br": "Brazilian Portuguese", "zh": "Mandarin Chinese"}
 STYLE_HINTS = {
@@ -41,10 +41,17 @@ def _messages(p: dict, feedback: str | None) -> list[dict]:
         "visual_description, on_screen_text, subtitle_text, duration_seconds, search_keywords. "
         "search_keywords is 1 to 3 simple, common ENGLISH nouns a stock-video site would have, e.g. 'power plant', 'laboratory scientist', 'city night'. Never abstract words. "
         "visual_description describes only what to draw (no text in the picture). "
-        "on_screen_text is a short caption of at most 8 words. subtitle_text equals the narration. "
-        "The hook is ONE spoken sentence of at most 12 words that makes people want to keep watching: a surprising fact, "
-        "a bold 'what if', or a question. Never open with 'Welcome', 'Today', 'In this video' or 'Did you know'. "
-        "Use short, vivid sentences, one idea per scene, and end the last scene with a short memorable line."
+        "on_screen_text is a BIG caption of at most 4 words: put the key number, name or striking phrase of that scene in it "
+        "(for example '0.01°C', '3 hearts', '1,500 km/h'); no full sentences. subtitle_text equals the narration. "
+        "The hook is ONE spoken sentence of at most 12 words that makes people stop scrolling: open with a concrete, "
+        "surprising detail or a specific number, not a generic question. NEVER open with 'Welcome', 'Today', 'In this video', "
+        "'Did you know', 'Have you ever wondered', 'Imagine', 'What if' or 'Fun fact'. "
+        "Write like you are talking to a curious 16 year old: plain words, short vivid sentences, one idea per scene, "
+        "no emojis, no filler. Include at least one specific number or named detail. "
+        "ACCURACY IS CRITICAL: use only well-established, widely documented facts. Do not invent statistics, names or dates. "
+        "Round numbers honestly, avoid absolute claims like 'the only', 'the first' or 'the hottest' unless certain, "
+        "and leave out any claim you are not sure about. "
+        "End the last scene with one short question that invites a comment."
     )
     if p.get("mode") == "prompt":
         brief = f"Video brief from the user: {p['prompt']}\n" + (f"Audience: {p['audience']}\n" if p.get("audience") else "")

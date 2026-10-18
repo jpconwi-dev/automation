@@ -202,7 +202,7 @@ def hashtag_list(raw: list, t: dict) -> list[str]:
     if len(tags) < 4:  # top up from the subject / topic so the post is never left without tags
         subj_words = _words(t.get("subject", ""))
         extra = [t.get("subject", "").replace(" ", "")] + [w for w in sorted(_words(t["topic"]) - subj_words, key=len, reverse=True)[:3]]
-        extra += ["didyouknow", "facts", "nature" if t.get("subject") else "science"]
+        extra += ["sciencefacts", "facts", "nature" if t.get("subject") else "science"]
         for w in extra:
             w = re.sub(r"[^A-Za-z0-9]", "", w)
             if w and not AI_TAG.match(w) and w.lower() not in seen and len(tags) < 6:
@@ -233,7 +233,7 @@ def build_caption(t: dict, proj: dict) -> tuple[str, str]:
         "Rules: 'title' is max 70 characters, starts with the main keyword, is a curiosity hook, no clickbait lies. "
         "'caption' is 2 short sentences (max 220 characters) that naturally use the main keyword and one related keyword, "
         "then ONE short question that invites comments. 'hashtags' is exactly 5 tags without '#': 2 specific to the subject, "
-        "2 broader topic tags, 1 format tag like didyouknow. The question must be specific to the topic. "
+        "2 broader topic tags, 1 format tag like sciencefacts or naturefacts. The question must be specific to the topic. "
         "Never ask people to like, share, follow or tag anyone, and never write 'comment YES'. Never use the words AI, artificial intelligence, generated, "
         "bot, or any AI-related hashtag. No emojis. "
         'JSON: {"title": "...", "caption": "...", "hashtags": ["..."]}', 0.6) or {}
