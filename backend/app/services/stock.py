@@ -21,6 +21,7 @@ STOP = set("""a an and are as at be been but by can for from has have how in int
 that the their them then there these they this to up use used uses using was were what when where which while who why will with
 about after also because before between both each during over under very your you than just like make made makes making""".split())
 _used: dict[str, set] = {}  # clips already used per project, so scenes don't repeat footage
+_reuse: dict[str, Counter] = {}  # times each clip was re-taken in this project (later takes use a later part of the clip)
 _prov_count: dict[str, Counter] = {}  # clips taken per provider in this project; ties go to the least-used source
 log = logging.getLogger("stock")
 _stats: dict[str, dict] = {}  # per provider for the scene being searched: how many clips it returned, or its error
@@ -372,11 +373,13 @@ def frame_filter(sw: int, sh: int, W: int, H: int) -> str:
             f"[bg][fg]overlay=(main_w-overlay_w)/2:(main_h-overlay_h)/2,fps=24")
 
 
-def _shrink(src, dst, aspect: str) -> None:
+def _shrink(src, dst, aspect: str, offset: float = 0.0) -> None:
     W, H = _preset()["dims"][aspect]
     total = _probe_duration(src)
     # Long films (Internet Archive, NASA) start with leaders and title cards: take the 16 s from about a third in.
     start = min(total * 0.33, total - 16) if total > 45 else 0
+    if offset and total > 8:  # a clip taken again for another scene starts later, so it doesn't look repeated
+        start = min(start + offset, max(total - 5, 0))
     sw, sh = _probe_size(src)
     cmd = [settings.ffmpeg_path, "-y", "-v", "error", *(["-ss", f"{start:.2f}"] if start > 0 else []), "-i", str(src),
            "-t", "16", "-an", "-vf", frame_filter(sw, sh, W, H),
@@ -387,6 +390,20 @@ def _shrink(src, dst, aspect: str) -> None:
         raise PipelineError(f"Couldn't process a stock clip: {e}")
     if r.returncode != 0:
         raise PipelineError(f"FFmpeg couldn't process a stock clip: {r.stderr[-300:]}")
+
+
+def _check_frames(clip) -> None:
+    """Reject clips that are mostly black or one flat colour: title slides, text-only cards and dead intros."""
+    import statistics
+    for t in ("0.6", "2.5"):
+        r = subprocess.run([settings.ffmpeg_path, "-v", "error", "-ss", t, "-i", str(clip), "-frames:v", "1",
+                            "-vf", "scale=96:-1,format=gray", "-f", "rawvideo", "-"], capture_output=True, timeout=60)
+        px = list(r.stdout)
+        if not px:
+            continue
+        if not (statistics.fmean(px) < 25 or statistics.pstdev(px) < 9):
+            return  # at least one frame has real picture content
+    raise PipelineError("The clip is a black or blank slide, not footage.")
 
 
 def has_subject(video: dict, must: set[str], alts: list[set[str]] | None) -> bool:
@@ -443,6 +460,7 @@ def fetch_clip(queries: list[str], aspect: str, index: int, clip_path, thumb_pat
     pid = clip_path.parent.name
     if index == 1:
         _used[pid] = set()
+        _reuse[pid] = Counter()
         _prov_count[pid] = Counter()
     used = _used.setdefault(pid, set())
     counts = _prov_count.setdefault(pid, Counter())
@@ -471,13 +489,16 @@ def fetch_clip(queries: list[str], aspect: str, index: int, clip_path, thumb_pat
                 if not files:
                     raise PipelineError(f"No usable video file for a {prov} clip.")
                 _download(_pick_file(files, aspect)["link"], dl, prov)
-                _shrink(dl, clip_path, aspect)  # keeps the project small: at most 16 s, 720p-class, no audio
+                reuse = _reuse.setdefault(pid, Counter())
+                _shrink(dl, clip_path, aspect, 6.0 * reuse[v["id"]])  # keeps the project small: at most 16 s, 720p-class, no audio
+                _check_frames(clip_path)
             except PipelineError as e:
                 log.warning("skipping %s clip %s: %s", prov, v["id"], e)
                 continue
             finally:
                 dl.unlink(missing_ok=True)
             used.add(v["id"])
+            _reuse[pid][v["id"]] += 1
             counts[prov] += 1
             try:
                 img = httpx.get(v["thumb"], timeout=30, headers={"User-Agent": _ua()}, follow_redirects=True).content
