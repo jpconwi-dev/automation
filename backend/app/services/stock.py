@@ -373,7 +373,11 @@ def frame_filter(sw: int, sh: int, W: int, H: int) -> str:
             f"[bg][fg]overlay=(main_w-overlay_w)/2:(main_h-overlay_h)/2,fps=24")
 
 
-def _shrink(src, dst, aspect: str, offset: float = 0.0) -> None:
+# Repeat shots of the same clip: (zoom, horizontal anchor). Variant 0 is the normal full frame.
+_VARIANTS = [(1.0, 0.5), (1.35, 0.2), (1.35, 0.8), (1.7, 0.5), (1.5, 0.3), (1.5, 0.7)]
+
+
+def _shrink(src, dst, aspect: str, offset: float = 0.0, variant: int = 0) -> None:
     W, H = _preset()["dims"][aspect]
     total = _probe_duration(src)
     # Long films (Internet Archive, NASA) start with leaders and title cards: take the 16 s from about a third in.
@@ -381,8 +385,13 @@ def _shrink(src, dst, aspect: str, offset: float = 0.0) -> None:
     if offset and total > 8:  # a clip taken again for another scene starts later, so it doesn't look repeated
         start = min(start + offset, max(total - 5, 0))
     sw, sh = _probe_size(src)
+    vf = frame_filter(sw, sh, W, H)
+    zoom, ax = _VARIANTS[variant % len(_VARIANTS)]
+    if zoom > 1.0:  # same clip used again: punch in on a different part so it looks like another shot
+        cw, ch = int(sw / zoom) // 2 * 2, int(sh / zoom) // 2 * 2
+        vf = f"crop={cw}:{ch}:{int((sw - cw) * ax)}:{(sh - ch) // 2}," + frame_filter(cw, ch, W, H)
     cmd = [settings.ffmpeg_path, "-y", "-v", "error", *(["-ss", f"{start:.2f}"] if start > 0 else []), "-i", str(src),
-           "-t", "16", "-an", "-vf", frame_filter(sw, sh, W, H),
+           "-t", "16", "-an", "-vf", vf,
            "-c:v", "libx264", "-preset", "veryfast", "-crf", "27", "-pix_fmt", "yuv420p", str(dst)]
     try:
         r = subprocess.run(cmd, capture_output=True, text=True, timeout=240)
@@ -468,8 +477,8 @@ def fetch_clip(queries: list[str], aspect: str, index: int, clip_path, thumb_pat
     global last_diag
     _stats.clear()
     kept = 0
-    # With a subject: first look for a clip not used yet, then (before giving up) reuse one that was already used.
-    for allow_used in ((False, True) if must else (False,)):
+    # A clip is used once per video. Reuse (with another crop) happens only if STOCK_ALLOW_REUSE=true.
+    for allow_used in ((False, True) if must and settings.stock_allow_reuse else (False,)):  # default: never reuse a clip
       for q in queries:
         qtok = tokens(q)
         if not qtok:
@@ -490,7 +499,7 @@ def fetch_clip(queries: list[str], aspect: str, index: int, clip_path, thumb_pat
                     raise PipelineError(f"No usable video file for a {prov} clip.")
                 _download(_pick_file(files, aspect)["link"], dl, prov)
                 reuse = _reuse.setdefault(pid, Counter())
-                _shrink(dl, clip_path, aspect, 6.0 * reuse[v["id"]])  # keeps the project small: at most 16 s, 720p-class, no audio
+                _shrink(dl, clip_path, aspect, 6.0 * reuse[v["id"]], reuse[v["id"]])  # keeps the project small: at most 16 s, 720p-class, no audio
                 _check_frames(clip_path)
             except PipelineError as e:
                 log.warning("skipping %s clip %s: %s", prov, v["id"], e)

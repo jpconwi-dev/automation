@@ -370,8 +370,18 @@ def make_scene_image(project: dict, script, scene, index: int, pdir: Path) -> di
             ai = _ai_scene_fallback(project, script, scene, size, seed, index, pdir)
             if ai is not None:
                 return {**ai, "searched": diag.removeprefix("searched: "), "note": f"no stock footage matched; AI picture used. {diag}"}
-            _make_layered(project, scene, index, pdir, seed)
-            return {"ai_generated": False, "model": None, "note": f"no stock footage found; placeholder used. {diag}"}
+            # No picture either (quota used up): a different, unused clip about the scene itself, without the subject.
+            skip = set(must or set()).union(*(alts or []))
+            broll = [q for q in dict.fromkeys(
+                " ".join(w for w in stock.tokens(e) if w not in skip) for e in
+                (scene.search_keywords, scene.visual_description, scene.on_screen_text)) if q][:3]
+            meta = stock.fetch_clip(broll, project["aspect_ratio"], index, pdir / f"{n}_clip.mp4", pdir / f"{n}.png",
+                                    context=context) if broll else None
+            if meta is not None:
+                meta = {**meta, "note": f"no clip of the subject was left; related footage used. {diag}"}
+            else:
+                _make_layered(project, scene, index, pdir, seed)
+                return {"ai_generated": False, "model": None, "note": f"no stock footage found; placeholder used. {diag}"}
         _text_layer((W, H), scene.on_screen_text, None).save(pdir / f"{n}_text.png")
         return meta
     elif settings.image_backend == "fallback":

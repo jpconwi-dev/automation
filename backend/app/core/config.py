@@ -77,6 +77,7 @@ class Settings(BaseSettings):
     # More footage sources. Use IMAGE_BACKEND=stock and list the ones you want in STOCK_PROVIDERS.
     # A source that fails or has no key is skipped; the best tag match across all of them wins.
     stock_providers: str = "nasa,wikimedia,archive,smithsonian,pixabay,pexels"
+    stock_allow_reuse: bool = False  # False = a clip is never used twice in one video
     stock_ai_fallback: bool = True  # scene with no matching clip gets a Cloudflare FLUX picture instead of placeholder shapes
     stock_contact: str = ""  # your email or site; sent in the User-Agent (Wikimedia and archive.org ask for it)
     nasa_base_url: str = "https://images-api.nasa.gov"  # NASA Image and Video Library, no key
