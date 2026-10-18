@@ -2,7 +2,7 @@ name: Daily Facebook post
 
 on:
   schedule:
-    - cron: "0 1,6 * * *"    # UTC. 01:00 and 06:00 UTC = 9:00 AM and 2:00 PM in UTC+8 (Philippines).
+    - cron: "0 4,12 * * *"   # UTC. 04:00 and 12:00 UTC = 12:00 PM and 8:00 PM in UTC+8 (Philippines).
   workflow_dispatch:           # lets you run it by hand from the Actions tab
     inputs:
       dry_run:

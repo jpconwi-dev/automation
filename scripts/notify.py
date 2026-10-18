@@ -15,7 +15,7 @@ import urllib.parse
 import urllib.request
 
 PHT = dt.timezone(dt.timedelta(hours=8))          # Philippines time
-SCHEDULE_PHT = [(9, 0), (14, 0)]                   # 9:00 AM and 2:00 PM, same as the workflow cron
+SCHEDULE_PHT = [(12, 0), (20, 0)]                  # 12:00 PM and 8:00 PM, same as the workflow cron
 TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 CHAT = os.environ.get("TELEGRAM_CHAT_ID", "")
 OUTCOME = os.environ.get("OUTCOME", "")
