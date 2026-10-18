@@ -38,6 +38,7 @@ FB_ASPECT = os.environ.get("FB_ASPECT", "9:16")
 GRAPH = "https://graph.facebook.com/v25.0"
 RUPLOAD = "https://rupload.facebook.com/video-upload/v25.0"
 H = {"X-Access-Key": KEY}
+THUMB_FILE = pathlib.Path(os.environ.get("THUMB_FILE", "thumbnail.jpg"))  # cover image made from the finished video
 HISTORY = pathlib.Path(os.environ.get("HISTORY_FILE", "data/posted.json"))  # every topic already posted
 
 
@@ -411,6 +412,26 @@ def post_reel(path: pathlib.Path, caption: str, record):
         if '"ready"' in st or '"published"' in st or "error" in st:
             break
         time.sleep(10)
+    set_fb_thumbnail(vid)
+
+
+def set_fb_thumbnail(video_id: str) -> None:
+    """Best effort: ask Facebook to use our cover image for the reel. A failure never fails the run."""
+    if not THUMB_FILE.is_file():
+        return
+    try:
+        with THUMB_FILE.open("rb") as f:
+            r = httpx.post(f"{GRAPH}/{video_id}/thumbnails", timeout=120,
+                           data={"is_preferred": "true", "access_token": PAGE_TOKEN}, files={"source": f})
+        if r.status_code < 400:
+            R["thumbnail"] = "made and sent to Facebook"
+            log("facebook thumbnail set")
+        else:
+            R["thumbnail"] = f"made, but Facebook did not accept it (HTTP {r.status_code}); it keeps its automatic cover"
+            log("facebook thumbnail not accepted:", r.status_code, r.text[:200])
+    except Exception as e:  # noqa: BLE001
+        R["thumbnail"] = f"made, but sending it to Facebook failed ({type(e).__name__})"
+        log("facebook thumbnail failed:", e)
 
 
 def post_video(path: pathlib.Path, title: str, caption: str, record):
@@ -477,6 +498,15 @@ def main():
     caption = add_credits(caption, meta)
     log("caption:\n" + caption)
     R.update(title=title, caption=caption, hashtags=re.findall(r"#\w+", caption.splitlines()[-1] if caption else ""))
+    try:
+        import thumbnail
+        thumbnail.make_thumbnail(path, title, THUMB_FILE)
+        R["thumbnail"] = "made"
+        log("thumbnail made:", THUMB_FILE)
+    except Exception as e:  # noqa: BLE001  a missing cover must never stop the post
+        THUMB_FILE.unlink(missing_ok=True)
+        R["thumbnail"] = f"not made ({type(e).__name__}: {str(e)[:80]})"
+        log("thumbnail not made:", e)
     if DRY_RUN:
         log("DRY_RUN on: not posting")
         return

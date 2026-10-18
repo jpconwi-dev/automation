@@ -151,7 +151,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: daily-video
-          path: video.mp4
+          path: |
+            video.mp4
+            thumbnail.jpg
           if-no-files-found: ignore
           retention-days: 3
 

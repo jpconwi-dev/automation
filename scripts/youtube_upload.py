@@ -113,6 +113,21 @@ def upload(token: str, meta: dict) -> dict:
     return json.loads(body)
 
 
+def set_thumbnail(token: str, video_id: str) -> str:
+    """Best effort: custom thumbnails need a verified channel and the full youtube scope, so this can be refused."""
+    img = pathlib.Path(os.environ.get("THUMB_FILE", "thumbnail.jpg"))
+    if not img.is_file():
+        return "no thumbnail file"
+    try:
+        status, _, body = http("POST", f"{API_BASE}/upload/youtube/v3/thumbnails/set?videoId={video_id}",
+                               {"Authorization": f"Bearer {token}", "Content-Type": "image/jpeg"}, img.read_bytes(), 120)
+    except Exception as e:  # noqa: BLE001
+        return f"failed ({type(e).__name__})"
+    if status == 200:
+        return "set"
+    return f"not accepted (HTTP {status}): {body[:160].decode('utf-8', 'replace')}"
+
+
 def save(d: dict) -> None:
     d["finished_at"] = dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds")
     try:
@@ -146,7 +161,9 @@ def main() -> int:
         log(f"uploaded: {url} (privacy: {actual or 'unknown'})")
         if actual and actual != privacy:
             log(f"WARNING: asked for {privacy} but YouTube set {actual}")
-        save({"ok": True, "id": vid, "url": url, "title": meta["snippet"]["title"], "privacy_requested": privacy,
+        thumb = set_thumbnail(token, vid) if vid else "skipped"
+        log("youtube thumbnail:", thumb)
+        save({"ok": True, "id": vid, "url": url, "thumbnail": thumb, "title": meta["snippet"]["title"], "privacy_requested": privacy,
               "privacy_actual": actual, "uploaded_at": dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds")})
         return 0
     except YTError as e:

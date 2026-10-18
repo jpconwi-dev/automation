@@ -319,6 +319,8 @@ def add_details(out, r, total, posted, show_fb):
     out.append(f"  Whole run: {span(total)}")
     if r.get("video_mb") is not None:
         out.append(f"File size: {r['video_mb']} MB")
+    if r.get("thumbnail"):
+        out.append(f"Thumbnail: {r['thumbnail']}")
     if r.get("scenes"):
         out.append("")
         out.append(f"Footage used ({len(r['scenes'])} scene{'s' if len(r['scenes']) != 1 else ''}):")
