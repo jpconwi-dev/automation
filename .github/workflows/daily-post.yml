@@ -65,6 +65,8 @@ jobs:
           LLM_BACKEND: api
           LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
           LLM_MODEL: openai/gpt-oss-120b
+          LLM_FALLBACK_BACKENDS: "hf_api"        # if Groq is rate-limited, try Hugging Face (needs HF_TOKEN with credits)
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
           LLM_FALLBACK_MODELS: openai/gpt-oss-20b,llama-3.1-8b-instant
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}

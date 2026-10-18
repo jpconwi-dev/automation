@@ -16,7 +16,7 @@ STYLE_HINTS = {
     "minimal": "clean flat shapes with lots of empty space",
     "illustrated": "friendly colorful storybook illustrations",
 }
-WORDS_PER_SECOND = 2.4
+WORDS_PER_SECOND = 2.0  # relaxed, easy-to-follow pace; faster scripts forced the voice to be sped up
 TONE_GUIDE = {
     "friendly": "warm and encouraging, like a kind teacher; simple everyday words",
     "professional": "clear, precise and polished; neutral wording, no slang",
@@ -129,15 +129,25 @@ def _chat_hf(messages: list[dict]) -> str:
                         [settings.hf_llm_model], "Hugging Face", settings.hf_timeout, settings.llm_max_tokens)
 
 
-def _chat(messages: list[dict]) -> str:
-    if settings.llm_backend == "api":
+def _token_budget(p: dict) -> int:
+    """Longer videos need a longer JSON reply; reasoning models also spend part of this budget thinking, so a small
+    fixed limit cuts a 90 second script off mid-JSON. Capped to stay inside free-tier per-minute limits."""
+    return max(settings.llm_max_tokens, min(6000, 2000 + int(p.get("duration", 30)) * 45))
+
+
+def _chat_one(backend: str, messages: list[dict], max_tokens: int | None = None) -> str:
+    if backend == "api":
         return _chat_openai(messages, settings.llm_base_url, settings.llm_api_key,
                             _model_list(settings.llm_model, settings.llm_fallback_models), "the language model API",
-                            settings.llm_timeout, settings.llm_max_tokens)
-    if settings.llm_backend == "hf_api":
-        return _chat_hf(messages)
-    if settings.llm_backend != "ollama":
-        raise PipelineError(f"Unknown LLM_BACKEND '{settings.llm_backend}'. Use 'api', 'ollama' or 'hf_api'.")
+                            settings.llm_timeout, max_tokens or settings.llm_max_tokens)
+    if backend == "hf_api":
+        if not settings.hf_token:
+            raise PipelineError("Hugging Face fallback skipped: HF_TOKEN is not set.")
+        return _chat_openai(messages, f"{settings.hf_base_url.rstrip('/')}/v1", settings.hf_token,
+                            [settings.hf_llm_model], "Hugging Face", settings.hf_timeout,
+                            max_tokens or settings.llm_max_tokens)
+    if backend != "ollama":
+        raise PipelineError(f"Unknown LLM_BACKEND '{backend}'. Use 'api', 'ollama' or 'hf_api'.")
     url, model = settings.ollama_url.rstrip("/"), settings.ollama_model
     for fmt in (Script.model_json_schema(), "json"):
         try:
@@ -157,6 +167,20 @@ def _chat(messages: list[dict]) -> str:
     raise PipelineError(f"Ollama returned an error ({r.status_code}): {r.text[:200]}")
 
 
+def _chat(messages: list[dict], max_tokens: int | None = None) -> str:
+    """Main backend first. If it fails (rate limit, quota, outage), try each backend in LLM_FALLBACK_BACKENDS
+    (e.g. "hf_api,ollama") that is actually available, instead of failing the whole video."""
+    order = [settings.llm_backend, *[b.strip() for b in settings.llm_fallback_backends.split(",")]]
+    errors: list[str] = []
+    for backend in dict.fromkeys(b for b in order if b):
+        try:
+            return _chat_one(backend, messages, max_tokens)
+        except PipelineError as e:
+            errors.append(f"{backend}: {e}")
+            print(f"language model backend '{backend}' failed, trying next: {e}", flush=True)
+    raise PipelineError(" | ".join(errors))
+
+
 def _extract_json(text: str) -> str:
     text = re.sub(r"<think>.*?</think>", "", text, flags=re.S)  # reasoning models (e.g. Qwen3) emit this first
     text = re.sub(r"^```(?:json)?|```$", "", text.strip(), flags=re.M).strip()
@@ -171,20 +195,23 @@ def _check_fit(script: Script, p: dict) -> None:
     if not (max(2, n // 2) <= len(script.scenes) <= n * 2):
         raise ValueError(f"expected about {n} scenes, got {len(script.scenes)}")
     words = sum(len(s.narration.split()) for s in script.scenes)
-    if words > p["duration"] * WORDS_PER_SECOND * 1.8:
+    if words > p["duration"] * WORDS_PER_SECOND * 1.35:
         raise ValueError(f"narration has {words} words; it must be shorter to fit {p['duration']} seconds")
 
 
 def generate_script(p: dict, check) -> Script:
-    feedback = None
-    for _ in range(3):
+    feedback, last = None, ""
+    budget = _token_budget(p)
+    for attempt in range(1, 5):  # 4 tries: a long script sometimes needs one more
         check()
-        raw = _chat(_messages(p, feedback))
+        raw = _chat(_messages(p, feedback), budget)
         try:
             script = Script.model_validate_json(_extract_json(raw))
             _check_fit(script, p)
             return script
         except ValueError as e:  # includes pydantic.ValidationError and json errors
+            last = str(e)[:300].replace("\n", " ")
+            print(f"script attempt {attempt} rejected: {last} (reply was {len(raw)} chars)", flush=True)
             feedback = f"Your previous reply was invalid ({str(e)[:500]}). Return corrected JSON only."
-    raise PipelineError("The language model didn't produce a valid script after 3 attempts. "
-                        "Try a larger model (LLM_MODEL / OLLAMA_MODEL) or a simpler topic.")
+    raise PipelineError("The language model didn't produce a valid script after 4 attempts. "
+                        f"Last problem: {last}. Try a larger model (LLM_MODEL / OLLAMA_MODEL) or a simpler topic.")

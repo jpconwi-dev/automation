@@ -23,7 +23,7 @@ def _preset():
     return PRESETS.get((settings.video_quality or "standard").strip().lower(), PRESETS["standard"])
 
 
-SUB_SIZE = {"16:9": 13, "9:16": 8, "1:1": 11}
+SUB_SIZE = {"16:9": 14, "9:16": 9, "1:1": 12}
 # Subtitle margins in libass units (384x288 grid). For 9:16 the text sits above the username/caption/buttons that
 # Facebook and Instagram draw over the bottom ~25% of a Reel, and away from the sides that tall phones crop.
 SUB_MARGIN = {"16:9": "MarginV=22", "9:16": "MarginV=72,MarginL=40,MarginR=58", "1:1": "MarginV=22"}
@@ -38,9 +38,9 @@ def _ts(s: float) -> str:
 def _chunks(text: str) -> list[str]:
     out = []
     for s in re.split(r"(?<=[.!?。！？])\s+", text.strip()):
-        while len(s) > 90:
-            cut = s.rfind(" ", 0, 90)
-            cut = cut if cut > 20 else 90
+        while len(s) > 44:  # short lines stay in step with the voice and fit in two lines
+            cut = s.rfind(" ", 0, 44)
+            cut = cut if cut > 14 else 44
             out.append(s[:cut].strip())
             s = s[cut:].strip()
         if s:
@@ -151,7 +151,9 @@ def render_video(project: dict, scenes, durations: list[float], speech: list[flo
     for k in range(1, n):
         f.append(f"[{last}][v{k}]xfade=transition=fade:duration={T}:offset={starts[k]:.3f}[x{k}]")
         last = f"x{k}"
-    style = f"Alignment=2,FontSize={SUB_SIZE[project['aspect_ratio']]},BorderStyle=3,Outline=1,Shadow=0,{SUB_MARGIN[project['aspect_ratio']]},PrimaryColour=&H00FFFFFF,BackColour=&H99000000"
+    style = (f"Fontname=DejaVu Sans,Bold=1,Alignment=2,FontSize={SUB_SIZE[project['aspect_ratio']]},BorderStyle=1,Outline=1.8,"
+             f"Shadow=1,Spacing=0.3,{SUB_MARGIN[project['aspect_ratio']]},PrimaryColour=&H00FFFFFF,"
+             "OutlineColour=&H00301A0B,BackColour=&H80000000")
     f.append(f"[{last}]subtitles=subtitles.srt:force_style='{style}'[vout]")
 
     a_idx = [add("-i", f"scene_{i + 1:02d}.wav") for i in range(n)]

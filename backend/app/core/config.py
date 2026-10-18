@@ -22,6 +22,7 @@ class Settings(BaseSettings):
     llm_api_key: str | None = None
     llm_model: str = "llama-3.3-70b-versatile"
     llm_fallback_models: str = "qwen/qwen3-32b"  # comma separated; tried in order when a model is rate-limited
+    llm_fallback_backends: str = ""  # comma separated, tried when the main backend fails, e.g. "hf_api,ollama"
     llm_timeout: int = 120
     llm_max_tokens: int = 3500
     hf_token: str | None = None

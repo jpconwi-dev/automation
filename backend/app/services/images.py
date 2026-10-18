@@ -166,28 +166,54 @@ def _wrap_px(d: ImageDraw.ImageDraw, text: str, font, max_w: float) -> list[str]
     return lines + ([cur] if cur else [])
 
 
+ACCENT_BAR = (255, 196, 0, 255)  # amber stripe on the title card
+
+
+def _draw_card(layer: Image.Image, box: tuple[float, float, float, float], pad: float) -> None:
+    """Title card: soft drop shadow, dark navy glass panel, thin light border and an amber accent stripe."""
+    from PIL import ImageFilter
+    x0, y0, x1, y1 = box
+    shadow = Image.new("RGBA", layer.size, (0, 0, 0, 0))
+    ImageDraw.Draw(shadow).rounded_rectangle([x0 + 3, y0 + 8, x1 + 3, y1 + 8], radius=pad, fill=(0, 0, 0, 150))
+    layer.alpha_composite(shadow.filter(ImageFilter.GaussianBlur(max(6, pad // 2))))
+    d = ImageDraw.Draw(layer)
+    d.rounded_rectangle([x0, y0, x1, y1], radius=pad, fill=(11, 19, 43, 214), outline=(255, 255, 255, 70), width=2)
+    bar = max(7, int(pad * 0.5))
+    d.rounded_rectangle([x0 + pad * 0.7, y0 + pad * 0.8, x0 + pad * 0.7 + bar, y1 - pad * 0.8], radius=bar // 2, fill=ACCENT_BAR)
+
+
+def _draw_title_text(d: ImageDraw.ImageDraw, x: float, y: float, line: str, font) -> None:
+    d.text((x + 2, y + 3), line, font=font, fill=(0, 0, 0, 170))  # soft shadow keeps it readable on any footage
+    d.text((x, y), line, font=font, fill=(255, 255, 255, 255))
+
+
 def _chip_portrait(layer: Image.Image, text: str) -> None:
-    """Caption chip for 9:16. Phones with tall screens (iPhone) crop the sides of a Reel and Facebook draws its own
-    buttons at the top and bottom, so the chip is centred, kept 11% in from each side and 14% below the top edge,
+    """Title card for 9:16. Phones with tall screens (iPhone) crop the sides of a Reel and Facebook draws its own
+    buttons at the top and bottom, so the card is centred, kept 11% in from each side and 14% below the top edge,
     wrapped by real pixel width, and the font shrinks until it fits in 3 lines."""
     w, h = layer.size
     d = ImageDraw.Draw(layer)
-    pad, side, top = max(14, w // 50), int(w * 0.11), int(h * 0.14)
-    max_w = w - 2 * side - 2 * pad
-    size = max(20, w // 22)
+    pad, side, top = max(16, w // 45), int(w * 0.11), int(h * 0.14)
+    bar = max(7, int(pad * 0.5))
+    inner = pad * 0.7 + bar + pad * 0.8  # room taken by the accent stripe on the left
+    max_w = w - 2 * side - inner - pad
+    size = max(24, w // 17)
     while True:
         font = _font(size)
         lines = _wrap_px(d, text, font, max_w)
-        if (len(lines) <= 3 and all(d.textlength(l, font=font) <= max_w for l in lines)) or size <= 16:
+        if (len(lines) <= 3 and all(d.textlength(l, font=font) <= max_w for l in lines)) or size <= 18:
             break
         size -= 2
     lines = lines[:3]
     tw = max(d.textlength(l, font=font) for l in lines)
-    lh = size * 1.25
-    x0 = (w - tw) / 2 - pad
-    d.rounded_rectangle([x0, top, x0 + tw + 2 * pad, top + 2 * pad + lh * len(lines) - pad * 0.5], radius=pad, fill=(10, 10, 14, 175))
+    lh = size * 1.3
+    card_w = inner + tw + pad * 1.5
+    x0 = (w - card_w) / 2
+    y1 = top + 2 * pad + lh * len(lines) - pad * 0.3
+    _draw_card(layer, (x0, top, x0 + card_w, y1), pad)
+    d = ImageDraw.Draw(layer)
     for i, line in enumerate(lines):
-        d.text((x0 + pad, top + pad + i * lh), line, font=font, fill=(255, 255, 255, 255))
+        _draw_title_text(d, x0 + inner, top + pad + i * lh, line, font)
 
 
 def _text_layer(size: tuple[int, int], text: str, label: str | None) -> Image.Image:
@@ -206,13 +232,17 @@ def _text_layer(size: tuple[int, int], text: str, label: str | None) -> Image.Im
     layer = Image.new("RGBA", size, (0, 0, 0, 0))
     d = ImageDraw.Draw(layer)
     if text.strip():
-        font, pad = _font(max(20, w // 22)), max(14, w // 50)
-        lines = textwrap.wrap(text, width=28 if w >= h else 20)[:3]
+        font, pad = _font(max(22, w // 20)), max(16, w // 45)
+        bar = max(7, int(pad * 0.5))
+        inner = pad * 0.7 + bar + pad * 0.8
+        lines = _wrap_px(d, text, font, w * 0.6)[:3]
         tw = max(d.textlength(line, font=font) for line in lines)
-        lh = font.size * 1.25 if hasattr(font, "size") else 24
-        d.rounded_rectangle([pad, pad, pad * 3 + tw, pad * 2 + lh * len(lines) + pad // 2], radius=pad, fill=(10, 10, 14, 175))
+        lh = font.size * 1.3 if hasattr(font, "size") else 28
+        x0, y0 = pad * 1.5, pad * 1.5
+        _draw_card(layer, (x0, y0, x0 + inner + tw + pad * 1.5, y0 + 2 * pad + lh * len(lines) - pad * 0.3), pad)
+        d = ImageDraw.Draw(layer)
         for i, line in enumerate(lines):
-            d.text((pad * 2, pad * 1.5 + i * lh), line, font=font, fill=(255, 255, 255, 255))
+            _draw_title_text(d, x0 + inner, y0 + pad + i * lh, line, font)
     if label:
         f = _font(max(12, w // 60))
         lw = d.textlength(label, font=f)

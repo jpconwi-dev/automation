@@ -337,7 +337,7 @@ def make_video(t: dict, duration: int) -> tuple[pathlib.Path, dict]:
         "mode": "explainer", "topic": t["topic"][:500], "audience": t["audience"][:200],
         "style": STYLE, "duration": duration, "language": "en-us",
         "aspect_ratio": FB_ASPECT, "subject": t.get("subject", ""), "subject_aliases": t.get("aliases", []),
-        "tone": TONE, "voice": "auto", "voice_speed": 1.0,
+        "tone": TONE, "voice": "auto", "voice_speed": 0.95,
         "background_music": True, "music_style": MUSIC_STYLE, "sound_effects": True,
     }
     p = ok(httpx.post(f"{API}/api/projects", json=body, headers=H, timeout=60), "create project")

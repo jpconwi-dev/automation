@@ -9,7 +9,7 @@ Narration length is whatever the voice happens to produce, so after speaking eve
 MIN_SCENE = 2.0        # a scene is never shorter than this (the crossfade is 0.5 s)
 MIN_GAP = 0.15         # shortest pause after a scene's narration
 GAP = 0.6              # normal pause after a scene's narration
-MAX_SPEEDUP = 1.3
+MAX_SPEEDUP = 1.15
 MAX_SLOWDOWN = 0.88
 
 

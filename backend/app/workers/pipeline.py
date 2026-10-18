@@ -121,9 +121,9 @@ def _run(job_id: str, project_id: str) -> None:
                     s = tts.synthesize(sc.narration, project["language"], wav, voice=project["voice"], speed=speed)
                 speech.append(s)
             need = sum(speech) + GAP * n + CLOSING
-            if silent or need <= target or speed >= 1.6:
+            if silent or need <= target or speed >= 1.15:  # never rush the voice past 1.15x: fast speech is hard to follow
                 break
-            speed = min(1.6, speed * max(1.08, need / target))  # too long for the slot: speak faster and redo
+            speed = min(1.15, speed * max(1.05, need / target))  # too long for the slot: speak faster and redo
         durations = plan_durations(speech, target)
         for i, d in enumerate(durations, 1):
             tts.pad_wav(pdir / f"scene_{i:02d}.wav", d)  # pads with silence (or trims) to the exact scene length

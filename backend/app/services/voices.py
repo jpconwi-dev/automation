@@ -10,7 +10,7 @@ from ..core.config import settings
 from ..core.errors import PipelineError
 from . import tts
 
-TONE_RATE = {"friendly": 1.0, "professional": 1.0, "energetic": 1.1, "calm": 0.9, "humorous": 1.05, "dramatic": 0.92}
+TONE_RATE = {"friendly": 1.0, "professional": 1.0, "energetic": 1.0, "calm": 0.9, "humorous": 1.0, "dramatic": 0.92}
 SAMPLE = {"en-us": "Hello! This is how your explainer video will sound.", "en-gb": "Hello! This is how your explainer video will sound.",
           "es": "¡Hola! Así sonará tu video explicativo.", "fr": "Bonjour ! Voici à quoi ressemblera votre vidéo explicative.",
           "hi": "नमस्ते! आपका वीडियो ऐसा सुनाई देगा।", "it": "Ciao! Ecco come suonerà il tuo video.",
