@@ -1,2 +1,7 @@
 backend: uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload --reload-dir app
 frontend: npm run dev
+
+
+
+
+https://github.com/mnfst/awesome-free-llm-apis
