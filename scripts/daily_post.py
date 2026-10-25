@@ -27,6 +27,7 @@ LLM_URL = os.environ.get("LLM_BASE_URL", "https://api.groq.com/openai/v1")
 LLM_MODEL = os.environ.get("LLM_MODEL", "llama-3.3-70b-versatile")
 FB_MODE = os.environ.get("FB_MODE", "auto")        # auto = Reel when 90s or less, normal video when longer | reel | video
 FB_STATE = os.environ.get("FB_STATE", "PUBLISHED") # set DRAFT to test without going public
+T_START = time.time()
 DRY_RUN = os.environ.get("DRY_RUN", "") == "true"  # make the video but do not post
 DURATIONS = [int(x) for x in re.split(r"[,\s]+", os.environ.get("DURATIONS", "30,60,90")) if x in ("30", "60", "90", "120")] or [60]
 DURATION_CHOICE = os.environ.get("DURATION", "").strip()   # "30" | "60" | "90" | "120" | "" / "auto" = random from DURATIONS
@@ -103,6 +104,20 @@ def already_covered(candidate: str, history: list[dict]) -> bool:
         for old in (p.get("topic", ""), p.get("title", "")):
             if old and too_similar(candidate, old):
                 return True
+    return False
+
+
+def subject_repeat(subject: str, history: list[dict], window: int = 60) -> bool:
+    """True when the same animal/thing was covered recently, even if the topic is worded differently (the same
+    'Arctic tern longest migration' fact came back as a new topic text and was only caught after rendering)."""
+    s = _words(subject)
+    if not s:
+        return False
+    for p in history[-window:]:
+        if s == _words(p.get("subject", "")):
+            return True
+        if any(old and s <= _words(old) for old in (p.get("topic", ""), p.get("title", ""))):
+            return True
     return False
 
 
@@ -295,13 +310,19 @@ def pick_topic(history: list[dict]) -> dict:
                     continue
                 t["topic"] = topic
                 t["subject"] = clean_subject(t.get("subject", "")) or derive_subject(topic)
+                if subject_repeat(t["subject"], history):
+                    log(f"subject '{t['subject']}' was covered recently, asking again:", topic)
+                    covered.extend([topic, t["subject"]])
+                    continue
                 t["audience"] = AUDIENCE  # always your own AUDIENCE setting, never one the model made up
                 return t
             except Exception as e:  # fall back to the list
                 log("LLM topic failed:", e)
                 break
     lines = [l.strip() for l in pathlib.Path("scripts/topics.txt").read_text().splitlines() if l.strip() and not l.startswith("#")]
-    fresh = [l for l in lines if not already_covered(l.split("|")[0], history)]
+    fresh = [l for l in lines if not already_covered(l.split("|")[0], history)
+             and not subject_repeat(parse_topic_line(l)["subject"] if "|" in l else "", history)] or \
+            [l for l in lines if not already_covered(l.split("|")[0], history)]
     if not fresh:
         sys.exit("No unused topics left (the AI topic step failed and topics.txt is used up). Add new lines to scripts/topics.txt. Nothing was posted.")
     return parse_topic_line(fresh[today.toordinal() % len(fresh)])
@@ -444,6 +465,30 @@ def post_video(path: pathlib.Path, title: str, caption: str, record):
     record(res.get("id", ""))
 
 
+def wait_for_slot() -> None:
+    """Scheduled runs start ~25 minutes early. Hold the finished video until the best-time slot, then post (see
+    post_schedule.py). Manual runs, a slot that already passed, or too little job time left: post straight away."""
+    if os.environ.get("GITHUB_EVENT_NAME") != "schedule" or os.environ.get("PEAK_WAIT", "true") != "true":
+        return
+    import post_schedule
+    now = dt.datetime.now(dt.timezone.utc)
+    target = post_schedule.current_target(now)
+    if not target:
+        return
+    wait = (target - now).total_seconds()
+    used = time.time() - T_START
+    if wait <= 0:
+        return
+    if wait > 40 * 60 or used + wait > 78 * 60:  # never risk the job's 90 minute limit for a better minute
+        log(f"slot {target:%a %H:%M} is {wait / 60:.0f} min away, too long to wait: posting now")
+        return
+    R["scheduled_slot"] = target.strftime("%a %H:%M (Philippine time)")
+    log(f"video ready; holding it until the {target:%A %H:%M} slot ({wait / 60:.0f} min)")
+    while wait > 0:
+        time.sleep(min(60, wait))
+        wait = (target - dt.datetime.now(dt.timezone.utc)).total_seconds()
+
+
 def pick_duration() -> int:
     return int(DURATION_CHOICE) if DURATION_CHOICE in ("30", "60", "90", "120") else random.choice(DURATIONS)
 
@@ -451,8 +496,16 @@ def pick_duration() -> int:
 def main():
     R["dry_run"] = DRY_RUN
     R["stage"] = "checking the Facebook token"
+    fb_error = ""
     if not DRY_RUN:
-        check_token()  # fail fast, before spending minutes on a video
+        try:
+            check_token()  # fail fast, before spending minutes on a video
+        except SystemExit as e:
+            if os.environ.get("YT_ENABLED", "") != "true":
+                raise  # nowhere else to post: stop now instead of rendering a video nobody will see
+            fb_error = str(e.code)
+            R["fb_error"] = fb_error[:600]
+            log("Facebook token problem, continuing so the video can still go to YouTube:", fb_error[:200])
     R["stage"] = "choosing a topic"
     history = load_history()
     log(f"{len(history)} earlier posts on record")
@@ -507,12 +560,21 @@ def main():
         THUMB_FILE.unlink(missing_ok=True)
         R["thumbnail"] = f"not made ({type(e).__name__}: {str(e)[:80]})"
         log("thumbnail not made:", e)
+    R["youtube_ready"] = True  # footage and caption passed every check: YouTube may upload this video whatever Facebook does
     if DRY_RUN:
         log("DRY_RUN on: not posting")
         return
+    R["stage"] = "waiting for the best posting time"
+    wait_for_slot()
     history = load_history()  # last check right before posting, in case another run finished meanwhile
-    if already_covered(t["topic"], history) or already_covered(title, history):
-        sys.exit("This topic was already posted. Skipping so nothing repeats.")
+    if already_covered(t["topic"], history):
+        R["youtube_ready"] = False
+        R["stage"] = "skipped: topic already posted"
+        R["skipped"] = "duplicate topic"
+        log("This topic was already posted (another run finished first). Skipping so nothing repeats; this is not an error.")
+        return
+    if already_covered(title, history):  # only the new title looks like an old one: the topic itself is fresh, so post it
+        log("note: the title is close to an earlier title; posting anyway because the topic is new")
 
     def record(video_id: str):
         R["video_id"] = video_id
@@ -525,11 +587,28 @@ def main():
 
     R["stage"] = "uploading to Facebook"
     t1 = time.time()
-    if as_reel:
-        post_reel(path, caption, record)
+    if fb_error:
+        R["facebook"] = "skipped (token problem)"
     else:
-        post_video(path, title, caption, record)
+        try:
+            if as_reel:
+                post_reel(path, caption, record)
+            else:
+                post_video(path, title, caption, record)
+            R["facebook"] = "posted"
+        except SystemExit as e:  # sys.exit("...") is how the Facebook helpers report a failure
+            fb_error = str(e.code)
+        except Exception as e:  # noqa: BLE001
+            fb_error = f"{type(e).__name__}: {e}"
+        if fb_error:
+            R["facebook"] = "failed"
+            R["fb_error"] = fb_error[:600]
     R["upload_seconds"] = round(time.time() - t1)
+    if fb_error:
+        # The video is saved and marked youtube_ready, so the YouTube step still runs after this. The run is reported
+        # as failed so you notice Facebook needs attention.
+        log("Facebook did not accept the video:", fb_error[:300])
+        sys.exit(f"Facebook posting failed: {fb_error}")
     R["stage"] = "done"
     log("done")
 

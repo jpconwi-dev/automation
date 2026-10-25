@@ -38,9 +38,14 @@ def _messages(p: dict, feedback: str | None) -> list[dict]:
     system = (
         "You write scripts for short educational explainer videos. Reply with ONE JSON object and nothing else. "
         "Keys: title, description, hook, scenes, closing_summary. Each item of scenes has: narration, "
-        "visual_description, on_screen_text, subtitle_text, duration_seconds, search_keywords. "
+        "visual_description, on_screen_text, subtitle_text, duration_seconds, search_keywords, emotion. "
+        "emotion is how the narrator should sound saying that scene, one of: neutral, curious, excited, awe, serious, "
+        "playful. Vary it with the content (a record-breaking number is 'awe', a danger is 'serious', a surprise is "
+        "'excited'); the last scene is 'curious'. "
         "search_keywords is 1 to 3 simple, common ENGLISH nouns a stock-video site would have, e.g. 'power plant', 'laboratory scientist', 'city night'. Never abstract words. "
-        "visual_description describes only what to draw (no text in the picture). "
+        "visual_description describes only what to draw (no text in the picture) and must show EXACTLY the animal or thing "
+        "the narration names: never a look-alike (a moth is not a hummingbird, a seal is not a sea lion, a crocodile is "
+        "not an alligator). "
         "on_screen_text is a BIG caption of at most 4 words: put the key number, name or striking phrase of that scene in it "
         "(for example '0.01°C', '3 hearts', '1,500 km/h'); no full sentences. subtitle_text equals the narration. "
         "The hook is ONE spoken sentence of at most 12 words that makes people stop scrolling: open with a concrete, "
@@ -51,7 +56,13 @@ def _messages(p: dict, feedback: str | None) -> list[dict]:
         "ACCURACY IS CRITICAL: use only well-established, widely documented facts. Do not invent statistics, names or dates. "
         "Round numbers honestly, avoid absolute claims like 'the only', 'the first' or 'the hottest' unless certain, "
         "and leave out any claim you are not sure about. "
-        "End the last scene with one short question that invites a comment."
+        "Every number you put in on_screen_text must also appear in that scene's narration, written the same way "
+        "(never a different figure in the caption than the one spoken). "
+        "CLOSING QUESTION: the very last sentence of the last scene is ONE short, specific question that invites a "
+        "comment: 6 to 12 words, its own sentence, ending with a single question mark, about the topic itself (for "
+        "example 'Which of these would you most want to see in person?'). Put the answer-style summary BEFORE it, "
+        "never inside it, and never add tags like 'right?' or 'huh?'. The sentence before the question is a complete "
+        "statement that ends with a full stop, so the question starts fresh."
     )
     if p.get("mode") == "prompt":
         brief = f"Video brief from the user: {p['prompt']}\n" + (f"Audience: {p['audience']}\n" if p.get("audience") else "")
@@ -206,6 +217,26 @@ def _check_fit(script: Script, p: dict) -> None:
         raise ValueError(f"narration has {words} words; it must be shorter to fit {p['duration']} seconds")
 
 
+def _numbers(text: str) -> set[str]:
+    return {m.replace(",", "").rstrip(".") for m in re.findall(r"\d[\d,]*\.?\d*", text)}
+
+
+def _check_quality(script: Script) -> None:
+    """Problems a viewer would notice: a closing question that is missing or too long to land, and caption numbers
+    that disagree with what the narrator says. Raised as ValueError so the writer is asked to fix them."""
+    last = " ".join(script.scenes[-1].narration.split())
+    if not last.endswith("?"):
+        raise ValueError("the last scene must END with one short closing question (6 to 12 words) that ends with '?'")
+    q = re.split(r"(?<=[.!?])\s+", last)[-1]
+    if len(q.split()) > 18 or len(q.split()) < 3:
+        raise ValueError("the closing question must be one short sentence of 6 to 12 words")
+    for i, sc in enumerate(script.scenes, 1):
+        missing = _numbers(sc.on_screen_text) - _numbers(sc.narration)
+        if missing:
+            raise ValueError(f"scene {i}: on_screen_text shows {', '.join(sorted(missing))} but the narration does not say "
+                             "it; use the same figure in both")
+
+
 def generate_script(p: dict, check) -> Script:
     feedback, last = None, ""
     budget = _token_budget(p)
@@ -215,6 +246,12 @@ def generate_script(p: dict, check) -> Script:
         try:
             script = Script.model_validate_json(_extract_json(raw))
             _check_fit(script, p)
+            try:
+                _check_quality(script)
+            except ValueError as e:
+                if attempt < 4:
+                    raise  # ask the writer to fix it
+                print(f"script accepted with a quality warning on the last attempt: {e}", flush=True)  # never lose the whole video over style
             return script
         except ValueError as e:  # includes pydantic.ValidationError and json errors
             last = str(e)[:300].replace("\n", " ")

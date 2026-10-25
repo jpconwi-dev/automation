@@ -136,6 +136,29 @@ def save(d: dict) -> None:
         pass
 
 
+HISTORY = pathlib.Path(os.environ.get("HISTORY_FILE", "data/posted.json"))
+
+
+def record_topic(r: dict, video_id: str) -> None:
+    """When Facebook did not take the video but YouTube did, the topic still counts as posted, otherwise tomorrow's run
+    would make the same video again. Nothing is recorded for a dry-run test upload or when Facebook already recorded it."""
+    if r.get("dry_run") or r.get("posted_at") or not r.get("topic"):
+        return
+    try:
+        try:
+            posts = json.loads(HISTORY.read_text(encoding="utf-8")).get("posts", [])
+        except (OSError, ValueError):
+            posts = []
+        posts.append({"topic": r.get("topic", ""), "subject": r.get("subject", ""), "title": r.get("title", ""),
+                      "video_id": "", "youtube_id": video_id, "state": "YOUTUBE_ONLY", "mode": "short",
+                      "seconds": r.get("duration_s"), "at": dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds")})
+        HISTORY.parent.mkdir(parents=True, exist_ok=True)
+        HISTORY.write_text(json.dumps({"posts": posts}, indent=2, ensure_ascii=False), encoding="utf-8")
+        log("topic recorded in", HISTORY)
+    except OSError as e:  # recording is a convenience: never turn a finished upload into a failure
+        log("could not record the topic:", e)
+
+
 def main() -> int:
     cid, secret, refresh = (os.environ.get(k, "") for k in ("YT_CLIENT_ID", "YT_CLIENT_SECRET", "YT_REFRESH_TOKEN"))
     if not (cid and secret and refresh):
@@ -145,6 +168,9 @@ def main() -> int:
         r = json.loads(RESULT.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         r = {}
+    if not r.get("youtube_ready"):  # daily_post.py sets this only for a video that passed every footage and caption check
+        log("this run made no publishable video (it stopped early or skipped a repeat), skipping.")
+        return 2
     privacy = os.environ.get("YT_PRIVACY", "public").lower()
     if privacy not in ("public", "unlisted", "private"):
         privacy = "public"
@@ -163,6 +189,7 @@ def main() -> int:
             log(f"WARNING: asked for {privacy} but YouTube set {actual}")
         thumb = set_thumbnail(token, vid) if vid else "skipped"
         log("youtube thumbnail:", thumb)
+        record_topic(r, vid)
         save({"ok": True, "id": vid, "url": url, "thumbnail": thumb, "title": meta["snippet"]["title"], "privacy_requested": privacy,
               "privacy_actual": actual, "uploaded_at": dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds")})
         return 0

@@ -15,7 +15,6 @@ import urllib.parse
 import urllib.request
 
 PHT = dt.timezone(dt.timedelta(hours=8))          # Philippines time
-SCHEDULE_PHT = [(12, 0), (20, 0)]                  # 12:00 PM and 8:00 PM, same as the workflow cron
 TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 CHAT = os.environ.get("TELEGRAM_CHAT_ID", "")
 OUTCOME = os.environ.get("OUTCOME", "")
@@ -120,12 +119,8 @@ def hide_secrets(text: str) -> str:
 
 
 def next_run(now):
-    for day in (0, 1):
-        for h, m in SCHEDULE_PHT:
-            c = (now + dt.timedelta(days=day)).replace(hour=h, minute=m, second=0, microsecond=0)
-            if c > now:
-                return c
-    return None
+    from post_schedule import next_post  # same folder; the table of best posting times
+    return next_post(now)
 
 
 def fb_message(text: str) -> str:
@@ -237,7 +232,7 @@ def build() -> str:
             fix = "Open the run link below and look for the first red step."
         else:
             title, cause, fix = explain(err + "\n" + log[-3000:])
-        out.append("❌ VIDEO FAILED TO POST")
+        out.append("❌ FACEBOOK POST FAILED" if r.get("youtube_ready") else "❌ VIDEO FAILED TO POST")
         out.append(f"Problem: {title}")
         out.append(f"When: {when(end or start)}")
         out.append(f"Stopped at: {r.get('stage') or 'before the video started'}")
@@ -261,6 +256,8 @@ def build() -> str:
             out.append(f"Time spent before failing: {span(total)}")
         out.append("")
         out.append("Technical detail: " + hide_secrets(err)[:600])
+        if r.get("youtube_ready"):  # Facebook failed, but the video was still sent to YouTube separately
+            out += youtube_lines(load_youtube())
     elif r.get("dry_run"):
         out.append("🧪 TEST RUN FINISHED (dry run)")
         out.append("The video was made but NOT posted to Facebook.")

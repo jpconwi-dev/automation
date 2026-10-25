@@ -7,7 +7,8 @@ import tempfile
 
 from PIL import Image, ImageDraw, ImageEnhance, ImageFilter, ImageFont
 
-FONTS = ["/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", "/usr/share/fonts/dejavu/DejaVuSans-Bold.ttf",
+FONTS = [str(pathlib.Path(__file__).resolve().parent.parent / "backend" / "app" / "assets" / "fonts" / "Poppins-Bold.ttf"),
+         "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", "/usr/share/fonts/dejavu/DejaVuSans-Bold.ttf",
          "DejaVuSans-Bold.ttf", "arialbd.ttf"]
 YELLOW = (255, 214, 0)
 

@@ -15,6 +15,7 @@ from PIL import Image
 
 from ..core.config import settings
 from ..core.errors import PipelineError
+from . import vision
 from .render import _preset
 
 STOP = set("""a an and are as at be been but by can for from has have how in into is it its more most not of on or our so
@@ -24,6 +25,7 @@ _used: dict[str, set] = {}  # clips already used per project, so scenes don't re
 _reuse: dict[str, Counter] = {}  # times each clip was re-taken in this project (later takes use a later part of the clip)
 _prov_count: dict[str, Counter] = {}  # clips taken per provider in this project; ties go to the least-used source
 log = logging.getLogger("stock")
+_bad: set[str] = set()  # clips rejected for showing the wrong thing, so later scenes don't download them again
 _stats: dict[str, dict] = {}  # per provider for the scene being searched: how many clips it returned, or its error
 last_diag = ""  # why the last fetch_clip found nothing; shown in the run log and Telegram report
 UA = "ExplainerVideoBot/1.0 (educational video generator; contact: set STOCK_CONTACT in backend/.env)"
@@ -292,12 +294,12 @@ def active_providers() -> list[str]:
     return [b] if b in PROVIDER_NAMES else []
 
 
-def _search(query: str, aspect: str) -> list[dict]:
+def _search(query: str, aspect: str, only: set[str] | None = None) -> list[dict]:
     """Search every active provider. With IMAGE_BACKEND=stock a provider that fails (or has no key) is skipped
     so one flaky source never stops a video; with a single provider its error is shown as before."""
     multi = settings.image_backend == "stock"
     out = []
-    for name in active_providers():
+    for name in (n for n in active_providers() if not only or n in only):
         fn = globals().get("_" + name) if name in PROVIDER_NAMES else None
         st = _stats.setdefault(name, {"found": 0, "err": None, "ids": set()})
         if fn is None:
@@ -459,7 +461,9 @@ def _diagnose(kept: int, must: set[str] | None, alts: list[set[str]] | None) -> 
 
 
 def fetch_clip(queries: list[str], aspect: str, index: int, clip_path, thumb_path, context: str = "",
-               must: set[str] | None = None, alts: list[set[str]] | None = None) -> dict | None:
+               must: set[str] | None = None, alts: list[set[str]] | None = None,
+               subject: set[str] | None = None, avoid: set[str] | None = None, confirm: bool = True,
+               providers: set[str] | None = None, min_score: int = 3) -> dict | None:
     """Download the best-matching unused clip from the active provider(s). Clips whose tags don't relate to the
     search are rejected, so a scene gets no footage (and a labeled placeholder) rather than unrelated footage.
     With several providers the best tag match wins; ties go to the source used least in this video, so a video
@@ -474,6 +478,9 @@ def fetch_clip(queries: list[str], aspect: str, index: int, clip_path, thumb_pat
     used = _used.setdefault(pid, set())
     counts = _prov_count.setdefault(pid, Counter())
     ctok = tokens(context)
+    # Words that mean "a look-alike, not the subject" (moth for hummingbird). Clips tagged with any are never used.
+    bad_words = (vision.conflict_words(must.union(*(alts or []))) if must else set()) | (avoid or set())
+    look = subject or must  # what the vision check compares against
     global last_diag
     _stats.clear()
     kept = 0
@@ -483,9 +490,11 @@ def fetch_clip(queries: list[str], aspect: str, index: int, clip_path, thumb_pat
         qtok = tokens(q)
         if not qtok:
             continue
-        ranked = sorted(((score(v, qtok, ctok), v) for v in _search(q, aspect) if allow_used or v["id"] not in used),
+        ranked = sorted(((score(v, qtok, ctok), v) for v in (_search(q, aspect, providers) if providers else _search(q, aspect))
+                         if allow_used or v["id"] not in used),
                         key=lambda t: (-t[0], counts[t[1].get("provider", "")]))
-        ranked = [(sc, v) for sc, v in ranked if sc >= 3]  # at least one search word must appear in the clip's tags
+        ranked = [(sc, v) for sc, v in ranked if v["id"] not in _bad and not vision.has_conflict(v.get("tags", ""), bad_words)]
+        ranked = [(sc, v) for sc, v in ranked if sc >= min_score]  # at least one search word must appear in the clip's tags
         if must:
             ranked = [(sc, v) for sc, v in ranked if has_subject(v, must, alts)]  # and ALL words of the subject (or of an alias)
         kept += len(ranked)
@@ -501,8 +510,10 @@ def fetch_clip(queries: list[str], aspect: str, index: int, clip_path, thumb_pat
                 reuse = _reuse.setdefault(pid, Counter())
                 _shrink(dl, clip_path, aspect, 6.0 * reuse[v["id"]], reuse[v["id"]])  # keeps the project small: at most 16 s, 720p-class, no audio
                 _check_frames(clip_path)
+                look_note = vision.verify(clip_path, _probe_duration(clip_path), look or set(), alts, confirm) if look else ""
             except PipelineError as e:
                 log.warning("skipping %s clip %s: %s", prov, v["id"], e)
+                _bad.add(v["id"])
                 continue
             finally:
                 dl.unlink(missing_ok=True)
@@ -518,6 +529,6 @@ def fetch_clip(queries: list[str], aspect: str, index: int, clip_path, thumb_pat
                 Image.new("RGB", (320, 180), (30, 30, 40)).save(thumb_path)
             return {"ai_generated": False, "source": prov, "query": q, "tags": v.get("tags"), "source_url": v.get("page"),
                     "credit": v.get("credit"), "credit_required": bool(v.get("credit_required")), "license": v.get("license"),
-                    "searched": _searched_summary()}
+                    "searched": _searched_summary(), "vision": look_note}
     last_diag = _diagnose(kept, must, alts)
     return None

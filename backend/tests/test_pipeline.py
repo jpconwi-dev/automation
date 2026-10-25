@@ -69,7 +69,7 @@ def fake_voice(text, language, out_path, voice="auto", speed=1.0):  # 22.05 kHz 
 tts.synthesize = fake_voice
 
 
-def fake_fetch(queries, aspect, index, clip_path, thumb_path, context="", must=None, alts=None):
+def fake_fetch(queries, aspect, index, clip_path, thumb_path, context="", must=None, alts=None, **_extra):
     if index == 3:
         return None  # exercise the labeled-placeholder path
     subprocess.run(["ffmpeg", "-y", "-v", "error", "-f", "lavfi", "-i", "testsrc2=size=640x360:rate=30:duration=2",

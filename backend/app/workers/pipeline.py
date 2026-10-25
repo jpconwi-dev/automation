@@ -1,12 +1,13 @@
 import logging
 import shutil
 import threading
+from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
 
 from ..core import db, storage
 from ..core.config import settings
 from ..core.errors import Cancelled, PipelineError
-from ..services import images, render, soundtrack, tts, video_ai, voices
+from ..services import delivery, images, render, soundtrack, tts, video_ai, voices
 from ..services.script import WORDS_PER_SECOND, generate_script
 
 log = logging.getLogger("pipeline")
@@ -15,6 +16,8 @@ _cancels: dict[str, threading.Event] = {}
 FPS = 24
 GAP = 0.45  # breathing room after each scene's narration, in seconds
 CLOSING = 1.0  # extra hold on the last scene (room for the closing chime)
+QUESTION_TAIL = 1.6  # hold after a spoken closing question, so it can land before the chime and the fade-out
+MIN_TAIL = 0.2  # a scene always keeps at least this much silence after its last word (never cut mid-word)
 
 
 def submit(job_id: str, project_id: str) -> None:
@@ -28,15 +31,59 @@ def request_cancel(job_id: str) -> None:
     db.update_job(job_id, cancel_requested=True)
 
 
-def plan_durations(speech: list[float], duration: int) -> list[float]:
-    """Scene lengths that add up to exactly `duration` seconds (frame-aligned). Short scripts get longer holds;
-    if narration is too long for the slot, the scene is shortened proportionally (the voice is sped up before this)."""
-    base = [s + GAP for s in speech]
-    base[-1] += CLOSING
-    scale = duration / sum(base)
-    d = [round(b * scale * FPS) / FPS for b in base]
+def plan_durations(speech: list[float], duration: int, tail: float = CLOSING) -> list[float]:
+    """Scene lengths that add up to exactly `duration` seconds (frame-aligned).
+    Narration is never cut: when the slot is too small, the pauses shrink first and the voice is only cut as a last
+    resort (the narration step speeds the voice up before this). `tail` is the hold on the last scene."""
+    n = len(speech)
+    gaps = [GAP] * n
+    gaps[-1] += tail
+    base = [s + g for s, g in zip(speech, gaps)]
+    if sum(base) <= duration:  # room to spare: stretch every scene a little (longer holds)
+        scale = duration / sum(base)
+        d = [round(b * scale * FPS) / FPS for b in base]
+    else:  # too long: take the time out of the pauses, not out of the speech
+        floors = [s + (tail if i == n - 1 else MIN_TAIL) for i, s in enumerate(speech)]
+        room = duration - sum(floors)
+        if room >= 0:
+            slack = [b - f for b, f in zip(base, floors)]
+            k = room / sum(slack) if sum(slack) > 0 else 0.0
+            d = [round((f + sl * k) * FPS) / FPS for f, sl in zip(floors, slack)]
+        else:  # even with minimum pauses it does not fit: the old proportional squeeze (voice may be trimmed)
+            scale = duration / sum(base)
+            d = [round(b * scale * FPS) / FPS for b in base]
     d[-1] = round((duration - sum(d[:-1])) * FPS) / FPS
     return d
+
+
+def _speak_scene(narration: str, hint: str | None, is_last: bool, project: dict, out_wav, speed: float,
+                 silent: bool) -> tuple[float, list[tuple[str, float, float, str]]]:
+    """Speak one scene piece by piece (see delivery.segment), shape each piece's pitch and loudness for its feeling, and
+    join them into one WAV. Returns the length and the exact (text, start, length, emotion) of every piece, which the
+    captions follow word by word."""
+    segs = delivery.segment(narration, hint, is_last, project["voice_speed"])
+    if not segs:
+        tts.write_silence(out_wav, 1.0)
+        return 1.0, []
+    out_wav = Path(out_wav)
+    parts, gaps, made = [], [], []
+    try:
+        for k, sg in enumerate(segs):
+            part = out_wav.with_name(f"{out_wav.stem}.part{k}.wav")
+            made.append(part)
+            if silent:
+                tts.write_silence(part, max(len(sg.text.split()) / WORDS_PER_SECOND, 0.6))
+            else:
+                spd = sg.speed if sg.absolute else min(1.3, speed * sg.speed)
+                tts.synthesize(sg.text, project["language"], part, voice=project["voice"], speed=spd)
+                delivery.shape(part, sg.pitch, sg.gain)
+            parts.append(part)
+            gaps.append(sg.gap_before)
+        total, spans = delivery.join_wavs_timed(parts, out_wav, gaps)
+    finally:
+        for f in made:
+            f.unlink(missing_ok=True)
+    return total, [(sg.shown, st, ln, sg.emotion) for sg, (st, ln) in zip(segs, spans)]
 
 
 def _run(job_id: str, project_id: str) -> None:
@@ -106,25 +153,28 @@ def _run(job_id: str, project_id: str) -> None:
             raise PipelineError(f"Unknown TTS_BACKEND '{settings.tts_backend}'. Use 'cloudflare', 'windows', 'kokoro' or 'none'.")
         target = project["duration"]
         speed = voices.effective_speed(project["tone"], project["voice_speed"])
+        # Each scene is spoken sentence by sentence with its own feeling (pace, pitch, loudness, pauses). The closing
+        # question is delivered on its own, slower than the rest and never sped up to fit the video length.
+        hints = [getattr(sc, "emotion", None) for sc in script.scenes]
+        last_segs = delivery.segment(script.scenes[-1].narration, hints[-1], True, project["voice_speed"])
+        has_question = bool(last_segs) and last_segs[-1].emotion == "question"
+        tail = QUESTION_TAIL if has_question else CLOSING
         speech: list[float] = []
+        cues: list[list[tuple[str, float, float, str]]] = []
         for attempt in range(4):
-            speech = []
+            speech, cues = [], []
             for i, sc in enumerate(script.scenes, 1):
                 check()
                 upd(message=(f"Creating narration {i} of {n}" if not silent else f"Timing scene {i} of {n} (silent video)")
                     + (" (speeding up to fit)" if attempt else ""), progress=50 + int(15 * (i - 1) / n))
-                wav = pdir / f"scene_{i:02d}.wav"
-                if silent:
-                    s = max(len(sc.narration.split()) / WORDS_PER_SECOND, 1.0)
-                    tts.write_silence(wav, s)
-                else:
-                    s = tts.synthesize(sc.narration, project["language"], wav, voice=project["voice"], speed=speed)
-                speech.append(s)
-            need = sum(speech) + GAP * n + CLOSING
+                s_i, c_i = _speak_scene(sc.narration, hints[i - 1], i == n, project, pdir / f"scene_{i:02d}.wav", speed, silent)
+                speech.append(s_i)
+                cues.append(c_i)
+            need = sum(speech) + GAP * n + tail
             if silent or need <= target or speed >= 1.15:  # never rush the voice past 1.15x: fast speech is hard to follow
                 break
             speed = min(1.15, speed * max(1.05, need / target))  # too long for the slot: speak faster and redo
-        durations = plan_durations(speech, target)
+        durations = plan_durations(speech, target, tail)
         for i, d in enumerate(durations, 1):
             tts.pad_wav(pdir / f"scene_{i:02d}.wav", d)  # pads with silence (or trims) to the exact scene length
         storage.guard(protect)
@@ -149,7 +199,7 @@ def _run(job_id: str, project_id: str) -> None:
         upd(stage="rendering", progress=72, message="Rendering video with FFmpeg")
         out = render.render_video(project, script.scenes, durations, speech, pdir, tmp, check,
                                   lambda f: upd(progress=72 + int(27 * f)), music=music, sfx=sfx,
-                                  music_external=bool(music_ext))
+                                  music_external=bool(music_ext), cues=cues)
         if storage.usage_bytes() + out.stat().st_size > storage.limit_bytes():
             storage.enforce(protect, reserve=out.stat().st_size)
         shutil.move(str(out), pdir / "video.mp4")

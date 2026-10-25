@@ -27,8 +27,9 @@ class MockOllama:
                 per = max(6, round(script_mod.word_target(p) / n * outer.ratio))
                 scenes = [{"narration": " ".join(["alpha beta gamma delta epsilon zeta eta theta"] * 20).split()[:per] and
                            " ".join((["alpha", "beta", "gamma", "delta", "epsilon", "zeta", "eta", "theta"] * 20)[:per]),
-                           "visual_description": "a friendly drawing of a leaf", "on_screen_text": f"Step {i + 1}",
+                           "visual_description": "a friendly drawing of a leaf", "on_screen_text": "Leaf facts",
                            "subtitle_text": "x" * 10, "duration_seconds": 10, "search_keywords": "leaf"} for i in range(n)]
+                scenes[-1]["narration"] += " Which part surprised you most?"
                 body = {"title": "Test video", "description": "A test", "hook": "Hook here", "scenes": scenes,
                         "closing_summary": "Bye"}
                 data = json.dumps({"message": {"content": json.dumps(body)}}).encode()

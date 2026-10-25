@@ -1,5 +1,6 @@
 import hashlib
 import random
+import re
 import shutil
 import textwrap
 from pathlib import Path
@@ -32,8 +33,11 @@ def image_size(aspect: str) -> tuple[int, int]:
     return {"16:9": (r(m), r(m * 9 / 16)), "9:16": (r(m * 9 / 16), r(m)), "1:1": (r(m), r(m))}[aspect]
 
 
+BUNDLED_FONT = Path(__file__).resolve().parents[1] / "assets" / "fonts" / "Poppins-Bold.ttf"  # SIL OFL, ships with the project
+
+
 def _font(size: int):
-    for p in ("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", "C:/Windows/Fonts/arialbd.ttf",
+    for p in (str(BUNDLED_FONT), "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", "C:/Windows/Fonts/arialbd.ttf",
               "/System/Library/Fonts/Supplemental/Arial Bold.ttf"):
         if Path(p).exists():
             return ImageFont.truetype(p, size)
@@ -166,88 +170,81 @@ def _wrap_px(d: ImageDraw.ImageDraw, text: str, font, max_w: float) -> list[str]
     return lines + ([cur] if cur else [])
 
 
-ACCENT_BAR = (255, 196, 0, 255)  # amber stripe on the title card
+ACCENT = (255, 196, 0, 255)       # amber: the one highlighted word and the small underline
+INK = (12, 14, 26, 255)           # outline colour, a near-black navy that reads on any footage
+_HL_SKIP = {"the", "a", "an", "of", "to", "in", "on", "for", "and", "or", "is", "are", "how", "why", "what", "that", "this",
+            "with", "from", "its", "it", "can", "does", "do", "your", "you", "by", "at", "as", "than", "more", "most"}
 
 
-def _draw_card(layer: Image.Image, box: tuple[float, float, float, float], pad: float) -> None:
-    """Title card: soft drop shadow, dark navy glass panel, thin light border and an amber accent stripe."""
+def _highlight_index(words: list[str]) -> int | None:
+    """Which word gets the amber colour: the first number if there is one, else the longest meaningful word."""
+    for i, w in enumerate(words):
+        if any(ch.isdigit() for ch in w):
+            return i
+    best = [(len(re.sub(r"\W", "", w)), i) for i, w in enumerate(words) if re.sub(r"\W", "", w).lower() not in _HL_SKIP]
+    return max(best)[1] if best and max(best)[0] >= 5 else None
+
+
+def _headline(layer: Image.Image, text: str, portrait: bool) -> None:
+    """On-screen headline in the style of short-video creators instead of a boxed card: big bold type with a thick dark
+    outline and a soft shadow, one amber highlighted word, and a short amber underline. Centred, kept 11% in from the
+    sides (tall phones crop the edges of a Reel) and 15% below the top edge (clear of the platform's own buttons)."""
     from PIL import ImageFilter
-    x0, y0, x1, y1 = box
-    shadow = Image.new("RGBA", layer.size, (0, 0, 0, 0))
-    ImageDraw.Draw(shadow).rounded_rectangle([x0 + 3, y0 + 8, x1 + 3, y1 + 8], radius=pad, fill=(0, 0, 0, 150))
-    layer.alpha_composite(shadow.filter(ImageFilter.GaussianBlur(max(6, pad // 2))))
-    d = ImageDraw.Draw(layer)
-    d.rounded_rectangle([x0, y0, x1, y1], radius=pad, fill=(11, 19, 43, 214), outline=(255, 255, 255, 70), width=2)
-    bar = max(7, int(pad * 0.5))
-    d.rounded_rectangle([x0 + pad * 0.7, y0 + pad * 0.8, x0 + pad * 0.7 + bar, y1 - pad * 0.8], radius=bar // 2, fill=ACCENT_BAR)
-
-
-def _draw_title_text(d: ImageDraw.ImageDraw, x: float, y: float, line: str, font) -> None:
-    d.text((x + 2, y + 3), line, font=font, fill=(0, 0, 0, 170))  # soft shadow keeps it readable on any footage
-    d.text((x, y), line, font=font, fill=(255, 255, 255, 255))
-
-
-def _chip_portrait(layer: Image.Image, text: str) -> None:
-    """Title card for 9:16. Phones with tall screens (iPhone) crop the sides of a Reel and Facebook draws its own
-    buttons at the top and bottom, so the card is centred, kept 11% in from each side and 14% below the top edge,
-    wrapped by real pixel width, and the font shrinks until it fits in 3 lines."""
     w, h = layer.size
-    d = ImageDraw.Draw(layer)
-    pad, side, top = max(16, w // 45), int(w * 0.11), int(h * 0.14)
-    bar = max(7, int(pad * 0.5))
-    inner = pad * 0.7 + bar + pad * 0.8  # room taken by the accent stripe on the left
-    max_w = w - 2 * side - inner - pad
-    size = max(24, w // 17)
+    probe = ImageDraw.Draw(layer)
+    side, top = (int(w * 0.11), int(h * 0.15)) if portrait else (int(w * 0.12), int(h * 0.09))
+    text = " ".join(text.split())
+    if len(text) <= 24:
+        text = text.upper()  # short punchy lines read better in capitals; long ones stay in normal case
+    size = max(30, w // (11 if portrait else 17))
     while True:
-        font = _font(size)
-        lines = _wrap_px(d, text, font, max_w)
-        if (len(lines) <= 3 and all(d.textlength(l, font=font) <= max_w for l in lines)) or size <= 18:
+        font, sw = _font(size), max(3, size // 11)
+        lines = _wrap_px(probe, text, font, w - 2 * side - 2 * sw)
+        if (len(lines) <= 3 and all(probe.textlength(l, font=font) <= w - 2 * side - 2 * sw for l in lines)) or size <= 18:
             break
         size -= 2
     lines = lines[:3]
-    tw = max(d.textlength(l, font=font) for l in lines)
-    lh = size * 1.3
-    card_w = inner + tw + pad * 1.5
-    x0 = (w - card_w) / 2
-    y1 = top + 2 * pad + lh * len(lines) - pad * 0.3
-    _draw_card(layer, (x0, top, x0 + card_w, y1), pad)
+    words = " ".join(lines).split()
+    hl = _highlight_index(words)
+    lh = int(size * 1.22)
+    space = probe.textlength(" ", font=font)
+    mask = Image.new("L", layer.size, 0)  # shadow shape
+    md = ImageDraw.Draw(mask)
+    placed, k = [], 0
+    for li, line in enumerate(lines):
+        lw = probe.textlength(line, font=font)
+        x, y = (w - lw) / 2, top + li * lh
+        for word in line.split():
+            placed.append((x, y, word, k == hl))
+            md.text((x, y + size * 0.07), word, font=font, fill=190, stroke_width=sw + 1)
+            x += probe.textlength(word, font=font) + space
+            k += 1
+    layer.alpha_composite(Image.merge("RGBA", (Image.new("L", layer.size, 0),) * 3 + (mask.filter(ImageFilter.GaussianBlur(max(5, size // 5))),)))
     d = ImageDraw.Draw(layer)
-    for i, line in enumerate(lines):
-        _draw_title_text(d, x0 + inner, top + pad + i * lh, line, font)
+    for x, y, word, hot in placed:
+        d.text((x, y), word, font=font, fill=ACCENT if hot else (255, 255, 255, 255), stroke_width=sw, stroke_fill=INK)
+    bar_w, bar_h = int(w * 0.16), max(5, size // 9)
+    y = top + len(lines) * lh + int(size * 0.14)  # below the descenders (g, y, p)
+    d.rounded_rectangle([(w - bar_w) / 2, y, (w + bar_w) / 2, y + bar_h], radius=bar_h // 2, fill=ACCENT)
+
+
+def _label(layer: Image.Image, label: str) -> None:
+    w, _ = layer.size
+    d = ImageDraw.Draw(layer)
+    f = _font(max(12, w // 60))
+    lw = d.textlength(label, font=f)
+    d.rounded_rectangle([w - lw - 26, 10, w - 10, 14 + f.size + 8 if hasattr(f, "size") else 34], radius=8, fill=(10, 10, 14, 175))
+    d.text((w - lw - 18, 14), label, font=f, fill=(255, 190, 220, 255))
 
 
 def _text_layer(size: tuple[int, int], text: str, label: str | None) -> Image.Image:
-    """Transparent RGBA layer with the on-screen caption chip (and placeholder label)."""
+    """Transparent RGBA layer with the on-screen headline (and the placeholder label)."""
     w, h = size
-    if h > w * 1.2 and text.strip():
-        layer = Image.new("RGBA", size, (0, 0, 0, 0))
-        _chip_portrait(layer, text)
-        if label:
-            d = ImageDraw.Draw(layer)
-            f = _font(max(12, w // 60))
-            lw = d.textlength(label, font=f)
-            d.rounded_rectangle([w - lw - 26, 10, w - 10, 34], radius=8, fill=(10, 10, 14, 175))
-            d.text((w - lw - 18, 14), label, font=f, fill=(255, 190, 220, 255))
-        return layer
     layer = Image.new("RGBA", size, (0, 0, 0, 0))
-    d = ImageDraw.Draw(layer)
     if text.strip():
-        font, pad = _font(max(22, w // 20)), max(16, w // 45)
-        bar = max(7, int(pad * 0.5))
-        inner = pad * 0.7 + bar + pad * 0.8
-        lines = _wrap_px(d, text, font, w * 0.6)[:3]
-        tw = max(d.textlength(line, font=font) for line in lines)
-        lh = font.size * 1.3 if hasattr(font, "size") else 28
-        x0, y0 = pad * 1.5, pad * 1.5
-        _draw_card(layer, (x0, y0, x0 + inner + tw + pad * 1.5, y0 + 2 * pad + lh * len(lines) - pad * 0.3), pad)
-        d = ImageDraw.Draw(layer)
-        for i, line in enumerate(lines):
-            _draw_title_text(d, x0 + inner, y0 + pad + i * lh, line, font)
+        _headline(layer, text, portrait=h > w * 1.2)
     if label:
-        f = _font(max(12, w // 60))
-        lw = d.textlength(label, font=f)
-        d.rounded_rectangle([w - lw - 26, 10, w - 10, 14 + f.size + 8 if hasattr(f, "size") else 34], radius=8, fill=(10, 10, 14, 175))
-        d.text((w - lw - 18, 14), label, font=f, fill=(255, 190, 220, 255))
+        _label(layer, label)
     return layer
 
 
@@ -302,6 +299,9 @@ def _make_layered(project: dict, scene, index: int, pdir: Path, seed: int) -> No
     Image.alpha_composite(still, txt).convert("RGB").save(pdir / f"{n}.png")  # still used for previews/thumbnails
 
 
+ai_fail_reason = ""  # why the last AI picture failed, shown in the scene's note so the run log explains it
+
+
 def _ai_scene_fallback(project: dict, script, scene, size: tuple[int, int], seed: int, index: int, pdir: Path) -> dict | None:
     """When no stock clip matches a scene, draw a picture of it with Cloudflare FLUX (free daily allowance) so the
     video never shows gradient shapes. Returns scene metadata, or None when AI is off or fails (placeholder then)."""
@@ -311,11 +311,22 @@ def _ai_scene_fallback(project: dict, script, scene, size: tuple[int, int], seed
     subject = (project.get("subject") or "").strip() or script.title
     prompt = (f"Photorealistic nature documentary photograph of {subject}. {scene.visual_description}. "
               "Sharp focus, natural light, high detail, realistic anatomy. No text, no letters, no watermark, no logo.")
-    try:
-        img = _generate_cloudflare(prompt, seed + index, size)
-    except Exception as e:  # noqa: BLE001  quota used up, network, bad reply: fall back to the placeholder
-        import logging
-        logging.getLogger("images").warning("AI picture for scene %s failed: %s", index, e)
+    global ai_fail_reason
+    img = None
+    for attempt in (1, 2):  # a slow or busy moment on Cloudflare should not cost the scene its picture
+        try:
+            img = _generate_cloudflare(prompt, seed + index + (attempt - 1) * 7, size)
+            break
+        except Exception as e:  # noqa: BLE001  quota used up, network, bad reply
+            import logging
+            import time
+            ai_fail_reason = f"{type(e).__name__}: {str(e)[:120]}"
+            logging.getLogger("images").warning("AI picture for scene %s failed (try %s): %s", index, attempt, e)
+            if "allowance" in str(e).lower() or "token" in str(e).lower():
+                break  # used-up quota or a bad token will not fix itself in a few seconds
+            if attempt == 1:
+                time.sleep(4)
+    if img is None:
         return None
     _overlay(img, scene.on_screen_text, None).save(pdir / f"scene_{index:02d}.png")
     return {"ai_generated": True, "model": settings.cloudflare_image_model, "source": "ai",
@@ -333,7 +344,7 @@ def make_scene_image(project: dict, script, scene, index: int, pdir: Path) -> di
         gen = {"hf_api": _generate_hf, "cloudflare": _generate_cloudflare}.get(settings.image_backend, _generate_ai)
         img, ai, label = gen(prompt, seed, size), True, None
     elif _is_stock(settings.image_backend):
-        from . import stock
+        from . import stock, vision
         from .render import DIMS
         W, H = DIMS[project["aspect_ratio"]]
         n = f"scene_{index:02d}"
@@ -364,7 +375,7 @@ def make_scene_image(project: dict, script, scene, index: int, pdir: Path) -> di
                     queries.append(q)
         context = f"{scene.visual_description} {scene.on_screen_text} {scene.search_keywords}"
         meta = stock.fetch_clip(queries, project["aspect_ratio"], index, pdir / f"{n}_clip.mp4", pdir / f"{n}.png",
-                                context=context, must=must, alts=alts)
+                                context=context, must=must, alts=alts, subject=must)
         if meta is None:  # nothing matched: draw a real picture of the scene instead of purple shapes
             diag = stock.last_diag
             ai = _ai_scene_fallback(project, script, scene, size, seed, index, pdir)
@@ -375,13 +386,21 @@ def make_scene_image(project: dict, script, scene, index: int, pdir: Path) -> di
             broll = [q for q in dict.fromkeys(
                 " ".join(w for w in stock.tokens(e) if w not in skip) for e in
                 (scene.search_keywords, scene.visual_description, scene.on_screen_text)) if q][:3]
+            # Related footage must still not show a look-alike of the subject (a hawk-moth in a hummingbird video).
             meta = stock.fetch_clip(broll, project["aspect_ratio"], index, pdir / f"{n}_clip.mp4", pdir / f"{n}.png",
-                                    context=context) if broll else None
+                                    context=context, subject=must or None, confirm=False,
+                                    avoid=vision.conflict_words(skip),
+                                    # Related footage is only worth showing when it is clearly about the scene: curated
+                                    # tag sources only (Wikimedia/Archive tags are whole descriptions, which let a
+                                    # "complex adaptive systems" lecture stand in for a bird) and two matching words.
+                                    providers={"pixabay", "pexels", "nasa"}, min_score=6) if broll else None
             if meta is not None:
-                meta = {**meta, "note": f"no clip of the subject was left; related footage used. {diag}"}
+                meta = {**meta, "note": f"no clip of the subject was left; related footage used. AI picture: "
+                                        f"{ai_fail_reason or 'off'}. {diag}"}
             else:
                 _make_layered(project, scene, index, pdir, seed)
-                return {"ai_generated": False, "model": None, "note": f"no stock footage found; placeholder used. {diag}"}
+                return {"ai_generated": False, "model": None,
+                        "note": f"no stock footage found; placeholder used. AI picture: {ai_fail_reason or 'off'}. {diag}"}
         _text_layer((W, H), scene.on_screen_text, None).save(pdir / f"{n}_text.png")
         return meta
     elif settings.image_backend == "fallback":

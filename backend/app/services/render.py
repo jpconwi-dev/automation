@@ -6,6 +6,7 @@ from pathlib import Path
 
 from ..core.config import settings
 from ..core.errors import Cancelled, PipelineError
+from . import captions
 
 # Quality presets. "standard" is exactly what was used before, so nothing changes unless VIDEO_QUALITY=high is set.
 PRESETS = {
@@ -90,15 +91,33 @@ def _run(cmd: list[str], cwd: Path, tmp: Path, total: float, check, on_progress)
         raise PipelineError(f"FFmpeg failed (exit {proc.returncode}). {tail}")
 
 
+FONT_DIR = Path(__file__).resolve().parents[1] / "assets" / "fonts"
+
+
+def write_ass(pdir: Path, scenes, starts: list[float], speech: list[float], cues, W: int, H: int, aspect: str, total: float) -> None:
+    """Word-by-word highlighted captions (see captions.py) plus the bundled font next to them for FFmpeg to find."""
+    flat: list[tuple[str, float, float, str]] = []
+    for i, sc in enumerate(scenes):
+        if cues and i < len(cues) and cues[i]:
+            flat += [(text, starts[i] + off, dur, emo) for text, off, dur, emo in cues[i]]
+        else:
+            flat += captions.cues_from_narration(sc.narration, starts[i], speech[i], i == len(scenes) - 1)
+    (pdir / "fonts").mkdir(exist_ok=True)
+    for f in FONT_DIR.glob("*.ttf"):
+        shutil.copy(f, pdir / "fonts" / f.name)
+    (pdir / "subtitles.ass").write_text(captions.build_ass(flat, W, H, aspect, total), encoding="utf-8")
+
+
 def render_video(project: dict, scenes, durations: list[float], speech: list[float], pdir: Path,
                  tmp: Path, check, on_progress, music: Path | None = None, sfx: dict | None = None,
-                 music_external: bool = False) -> Path:
+                 music_external: bool = False, cues=None) -> Path:
     q = _preset()
     W, H = q["dims"][project["aspect_ratio"]]
     OW, OH = int(W * q["oversample"]) // 2 * 2, int(H * q["oversample"]) // 2 * 2  # zoom canvas (even numbers)
     n, total = len(scenes), sum(durations)
     starts = [sum(durations[:i]) for i in range(n)]
-    write_srt(pdir / "subtitles.srt", scenes, list(zip(starts, speech)))
+    write_srt(pdir / "subtitles.srt", scenes, list(zip(starts, speech)))  # plain copy for download; the video burns in the .ass
+    write_ass(pdir, scenes, starts, speech, cues, W, H, project["aspect_ratio"], total)
 
     args: list[str] = []
     count = [0]
@@ -151,10 +170,7 @@ def render_video(project: dict, scenes, durations: list[float], speech: list[flo
     for k in range(1, n):
         f.append(f"[{last}][v{k}]xfade=transition=fade:duration={T}:offset={starts[k]:.3f}[x{k}]")
         last = f"x{k}"
-    style = (f"Fontname=DejaVu Sans,Bold=1,Alignment=2,FontSize={SUB_SIZE[project['aspect_ratio']]},BorderStyle=1,Outline=1.8,"
-             f"Shadow=1,Spacing=0.3,{SUB_MARGIN[project['aspect_ratio']]},PrimaryColour=&H00FFFFFF,"
-             "OutlineColour=&H00301A0B,BackColour=&H80000000")
-    f.append(f"[{last}]subtitles=subtitles.srt:force_style='{style}'[vout]")
+    f.append(f"[{last}]subtitles=subtitles.ass:fontsdir=fonts[vout]")
 
     a_idx = [add("-i", f"scene_{i + 1:02d}.wav") for i in range(n)]
     for i, ai in enumerate(a_idx):  # voices may use any sample rate or channel count; normalise before joining

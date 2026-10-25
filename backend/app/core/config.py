@@ -42,6 +42,7 @@ class Settings(BaseSettings):
     cloudflare_base_url: str = "https://api.cloudflare.com/client/v4"
     cloudflare_image_model: str = "@cf/black-forest-labs/flux-1-schnell"  # FLUX.1 [schnell], Apache-2.0 weights
     cloudflare_tts_model: str = "@cf/myshell-ai/melotts"  # MeloTTS, MIT
+    cloudflare_vision_model: str = "@cf/llava-hf/llava-1.5-7b-hf"  # looks at stock clips to catch look-alikes (FOOTAGE_VISION)
     cloudflare_steps: int = 4
     # When the free Cloudflare voice allowance is used up, narrate with Kokoro instead ("kokoro" or "none").
     tts_fallback: str = "kokoro"
@@ -78,6 +79,9 @@ class Settings(BaseSettings):
     # A source that fails or has no key is skipped; the best tag match across all of them wins.
     stock_providers: str = "nasa,wikimedia,archive,smithsonian,pixabay,pexels"
     stock_allow_reuse: bool = False  # False = a clip is never used twice in one video
+    # off | auto | strict. A small vision model checks frames of each clip against the subject (see services/vision.py).
+    # auto rejects clips that show a look-alike (a moth for a hummingbird); strict also rejects clips that never show the subject.
+    footage_vision: str = "auto"
     stock_ai_fallback: bool = True  # scene with no matching clip gets a Cloudflare FLUX picture instead of placeholder shapes
     stock_contact: str = ""  # your email or site; sent in the User-Agent (Wikimedia and archive.org ask for it)
     nasa_base_url: str = "https://images-api.nasa.gov"  # NASA Image and Video Library, no key

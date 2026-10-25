@@ -83,6 +83,14 @@ class Scene(BaseModel):
     subtitle_text: str = Field(min_length=3, max_length=900)
     duration_seconds: float = Field(ge=3, le=90)
     search_keywords: str = Field(default="", max_length=80)
+    # How the narrator should sound saying this scene (pace and pauses are chosen from it). Unknown values become neutral.
+    emotion: str = Field(default="neutral", max_length=20)
+
+    @field_validator("emotion", mode="before")
+    @classmethod
+    def tidy_emotion(cls, v):
+        v = str(v or "neutral").strip().lower()
+        return v if v in ("neutral", "curious", "excited", "awe", "serious", "playful", "question") else "neutral"
 
 
 class Script(BaseModel):
