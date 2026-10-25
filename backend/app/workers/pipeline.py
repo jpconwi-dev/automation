@@ -56,34 +56,71 @@ def plan_durations(speech: list[float], duration: int, tail: float = CLOSING) ->
     return d
 
 
-def _speak_scene(narration: str, hint: str | None, is_last: bool, project: dict, out_wav, speed: float,
-                 silent: bool) -> tuple[float, list[tuple[str, float, float, str]]]:
-    """Speak one scene piece by piece (see delivery.segment), shape each piece's pitch and loudness for its feeling, and
-    join them into one WAV. Returns the length and the exact (text, start, length, emotion) of every piece, which the
-    captions follow word by word."""
-    segs = delivery.segment(narration, hint, is_last, project["voice_speed"])
-    if not segs:
+def _synth_parts(narration: str, hint: str | None, is_last: bool, project: dict, out_wav, silent: bool) -> list[tuple]:
+    """Speak one scene piece by piece (see delivery.segment) at the voice's natural speed, shape each piece's pitch and
+    loudness for its feeling and cut the silence off its ends. Returns (file, piece, seconds of speech, syllables)."""
+    out_wav = Path(out_wav)
+    cjk = project["language"] in ("ja", "zh")
+    parts = []
+    for k, sg in enumerate(delivery.segment(narration, hint, is_last, project["voice_speed"])):
+        part = out_wav.with_name(f"{out_wav.stem}.part{k}.wav")
+        if silent:
+            voiced = max(len(sg.text.split()) / WORDS_PER_SECOND, 0.6)
+            tts.write_silence(part, voiced)
+        else:
+            tts.synthesize(sg.text, project["language"], part, voice=project["voice"], speed=1.0)
+            delivery.shape(part, sg.pitch, sg.gain)
+            voiced = delivery.trim_silence(part)
+        parts.append((part, sg, voiced, delivery.syllables(sg.text, cjk)))
+    return parts
+
+
+def _natural_rate(all_parts: list[list[tuple]]) -> float:
+    """The voice's usual speed in syllables per second: the middle value over every sentence of any real length."""
+    rates = sorted(syl / v for scene in all_parts for _, sg, v, syl in scene if not sg.absolute and syl >= 6 and v > 0.2)
+    if not rates:
+        rates = sorted(syl / v for scene in all_parts for _, sg, v, syl in scene if v > 0.1)
+    return rates[len(rates) // 2] if rates else 3.5
+
+
+def _assemble(parts: list[tuple], out_wav, natural: float, speed: float, base_speed: float,
+              silent: bool) -> tuple[float, list[tuple[str, float, float, str]]]:
+    """Re-time every piece to the video's steady rate (natural x speed x its small feeling factor; the closing question
+    is slower and never takes part in the speed-up) and join them into the scene's WAV. Returns the length and the exact
+    (text, start, length, emotion) of every piece, which the captions follow word by word."""
+    out_wav = Path(out_wav)
+    if not parts:
         tts.write_silence(out_wav, 1.0)
         return 1.0, []
-    out_wav = Path(out_wav)
-    parts, gaps, made = [], [], []
+    files, gaps, made = [], [], []
     try:
-        for k, sg in enumerate(segs):
-            part = out_wav.with_name(f"{out_wav.stem}.part{k}.wav")
-            made.append(part)
-            if silent:
-                tts.write_silence(part, max(len(sg.text.split()) / WORDS_PER_SECOND, 0.6))
+        for k, (part, sg, voiced, syl) in enumerate(parts):
+            if silent or voiced <= 0.05:
+                files.append(part)
             else:
-                spd = sg.speed if sg.absolute else min(1.3, speed * sg.speed)
-                tts.synthesize(sg.text, project["language"], part, voice=project["voice"], speed=spd)
-                delivery.shape(part, sg.pitch, sg.gain)
-            parts.append(part)
+                want = natural * (min(base_speed * sg.speed, 0.98) if sg.absolute else speed * sg.speed)
+                lo, hi = (0.82, 1.3) if syl >= 6 else (0.92, 1.12)  # a two-word piece is a noisy measurement: nudge it less
+                tmp = part.with_name(part.stem + ".t.wav")
+                made.append(tmp)
+                delivery.retime(part, tmp, max(lo, min(hi, want * voiced / syl)))
+                files.append(tmp)
             gaps.append(sg.gap_before)
-        total, spans = delivery.join_wavs_timed(parts, out_wav, gaps)
+        total, spans = delivery.join_wavs_timed(files, out_wav, gaps)
     finally:
         for f in made:
             f.unlink(missing_ok=True)
-    return total, [(sg.shown, st, ln, sg.emotion) for sg, (st, ln) in zip(segs, spans)]
+    return total, [(sg.shown, st, ln, sg.emotion) for (_, sg, _, _), (st, ln) in zip(parts, spans)]
+
+
+def _speak_scene(narration: str, hint: str | None, is_last: bool, project: dict, out_wav, speed: float,
+                 silent: bool) -> tuple[float, list[tuple[str, float, float, str]]]:
+    """One scene on its own (used when the whole video's rate is not needed)."""
+    parts = _synth_parts(narration, hint, is_last, project, out_wav, silent)
+    try:
+        return _assemble(parts, out_wav, _natural_rate([parts]), speed, speed, silent)
+    finally:
+        for f in parts:
+            f[0].unlink(missing_ok=True)
 
 
 def _run(job_id: str, project_id: str) -> None:
@@ -159,21 +196,33 @@ def _run(job_id: str, project_id: str) -> None:
         last_segs = delivery.segment(script.scenes[-1].narration, hints[-1], True, project["voice_speed"])
         has_question = bool(last_segs) and last_segs[-1].emotion == "question"
         tail = QUESTION_TAIL if has_question else CLOSING
+        # Speak every scene once, at the voice's natural speed. Fitting the video length then only re-times the saved
+        # pieces (cheap) instead of speaking everything again, and one steady rate is used for the whole video.
+        all_parts: list[list[tuple]] = []
+        for i, sc in enumerate(script.scenes, 1):
+            check()
+            upd(message=(f"Creating narration {i} of {n}" if not silent else f"Timing scene {i} of {n} (silent video)"),
+                progress=50 + int(15 * (i - 1) / n))
+            all_parts.append(_synth_parts(sc.narration, hints[i - 1], i == n, project, pdir / f"scene_{i:02d}.wav", silent))
+        natural = _natural_rate(all_parts)
+        base_speed = speed
         speech: list[float] = []
         cues: list[list[tuple[str, float, float, str]]] = []
-        for attempt in range(4):
-            speech, cues = [], []
-            for i, sc in enumerate(script.scenes, 1):
-                check()
-                upd(message=(f"Creating narration {i} of {n}" if not silent else f"Timing scene {i} of {n} (silent video)")
-                    + (" (speeding up to fit)" if attempt else ""), progress=50 + int(15 * (i - 1) / n))
-                s_i, c_i = _speak_scene(sc.narration, hints[i - 1], i == n, project, pdir / f"scene_{i:02d}.wav", speed, silent)
-                speech.append(s_i)
-                cues.append(c_i)
-            need = sum(speech) + GAP * n + tail
-            if silent or need <= target or speed >= 1.15:  # never rush the voice past 1.15x: fast speech is hard to follow
-                break
-            speed = min(1.15, speed * max(1.05, need / target))  # too long for the slot: speak faster and redo
+        try:
+            for attempt in range(4):
+                speech, cues = [], []
+                for i, parts in enumerate(all_parts, 1):
+                    s_i, c_i = _assemble(parts, pdir / f"scene_{i:02d}.wav", natural, speed, base_speed, silent)
+                    speech.append(s_i)
+                    cues.append(c_i)
+                need = sum(speech) + GAP * n + tail
+                if silent or need <= target or speed >= 1.15:  # never rush the voice past 1.15x: fast speech is hard to follow
+                    break
+                speed = min(1.15, speed * max(1.03, need / target))  # too long for the slot: a little faster, then re-time again
+        finally:
+            for scene_parts in all_parts:
+                for f in scene_parts:
+                    f[0].unlink(missing_ok=True)
         durations = plan_durations(speech, target, tail)
         for i, d in enumerate(durations, 1):
             tts.pad_wav(pdir / f"scene_{i:02d}.wav", d)  # pads with silence (or trims) to the exact scene length

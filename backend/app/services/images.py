@@ -308,15 +308,28 @@ def _ai_scene_fallback(project: dict, script, scene, size: tuple[int, int], seed
     from . import cloudflare
     if not settings.stock_ai_fallback or not cloudflare.configured():
         return None
+    from . import stock, vision
     subject = (project.get("subject") or "").strip() or script.title
-    prompt = (f"Photorealistic nature documentary photograph of {subject}. {scene.visual_description}. "
-              "Sharp focus, natural light, high detail, realistic anatomy. No text, no letters, no watermark, no logo.")
+    look = (getattr(script, "subject_look", "") or "").strip().rstrip(".")
+    sub_tok = stock.tokens(subject)
+    alts = [stock.tokens(a) for a in (project.get("subject_aliases") or []) if stock.tokens(a)]
+    bad = sorted(vision.conflict_words(sub_tok.union(*alts))) if sub_tok else []
+    # Describe by appearance first: a name like "snailfish" alone makes the picture model draw a snail.
+    what = f"{look} ({subject})" if look else subject
+    prompt = (f"Photorealistic nature documentary photograph of {what}. {scene.visual_description}. "
+              + (f"It is not a {' or a '.join(bad[:3])}. " if bad else "")
+              + "Sharp focus, natural light, high detail, realistic anatomy. No text, no letters, no watermark, no logo.")
     global ai_fail_reason
-    img = None
-    for attempt in (1, 2):  # a slow or busy moment on Cloudflare should not cost the scene its picture
+    img, check_note = None, ""
+    for attempt in (1, 2, 3):  # a busy moment on Cloudflare, or a picture of the wrong animal, gets another try
         try:
-            img = _generate_cloudflare(prompt, seed + index + (attempt - 1) * 7, size)
+            cand = _generate_cloudflare(prompt, seed + index + (attempt - 1) * 7, size)
+            check_note = vision.verify_image(cand, sub_tok, alts) if sub_tok else ""
+            img = cand
             break
+        except vision.LookAlike as e:  # the picture showed a look-alike: draw it again with another seed
+            ai_fail_reason = str(e)[:140]
+            continue
         except Exception as e:  # noqa: BLE001  quota used up, network, bad reply
             import logging
             import time
@@ -330,7 +343,7 @@ def _ai_scene_fallback(project: dict, script, scene, size: tuple[int, int], seed
         return None
     _overlay(img, scene.on_screen_text, None).save(pdir / f"scene_{index:02d}.png")
     return {"ai_generated": True, "model": settings.cloudflare_image_model, "source": "ai",
-            "tags": f"AI picture of {subject}"}
+            "tags": f"AI picture of {subject}", "vision": check_note}
 
 
 def make_scene_image(project: dict, script, scene, index: int, pdir: Path) -> dict:

@@ -99,6 +99,8 @@ class Script(BaseModel):
     hook: str = Field(min_length=3, max_length=400)
     scenes: list[Scene] = Field(min_length=1, max_length=30)
     closing_summary: str = Field(min_length=3, max_length=600)
+    # What the subject looks like, and what it is NOT, for the picture model (see script.py). Optional.
+    subject_look: str = Field(default="", max_length=300)
 
 
 class ProjectOut(ProjectCreate):

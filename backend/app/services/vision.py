@@ -24,6 +24,10 @@ from ..core.errors import PipelineError
 
 log = logging.getLogger("vision")
 
+
+class LookAlike(PipelineError):
+    """The footage or picture shows something else than the subject (as opposed to a technical failure)."""
+
 _INSECTS = {"moth", "hawkmoth", "sphinx", "butterfly", "insect", "bug", "wasp", "hornet", "dragonfly", "hoverfly", "fly", "bee"}
 _BIRDS = {"hummingbird", "sunbird", "eagle", "owl", "parrot", "sparrow", "finch", "robin", "swallow", "kingfisher",
           "hawk", "falcon", "bird"}
@@ -54,6 +58,12 @@ CONFLICTS: dict[str, set[str]] = {
     "raven": {"crow"},
     "octopus": {"squid", "cuttlefish"},
     "squid": {"octopus", "cuttlefish"},
+    "snailfish": {"snail", "shell", "slug", "gastropod", "mollusk", "mollusc"},
+    "snail": {"snailfish"},
+    "catfish": {"cat"},
+    "lionfish": {"lion"},
+    "starfish": {"star"},
+    "jellyfish": {"jelly"},
     "turtle": {"tortoise"},
     "tortoise": {"turtle"},
 }
@@ -144,3 +154,26 @@ def verify(clip, duration: float, subject: set[str], alts: list[set[str]] | None
     if settings.footage_vision == "strict" and confirm and True not in verdicts:
         raise PipelineError(f"the clip does not clearly show the subject ({'; '.join(s[:40] for s in seen)})")
     return note
+
+
+def verify_image(img, subject: set[str], alts: list[set[str]] | None = None) -> str:
+    """The same look-alike check for a picture drawn by the AI (a "snailfish" prompt can come back as a snail with a shell).
+    Raises PipelineError when the model names a look-alike and not the subject; never because the model is unavailable."""
+    if not enabled() or not subject:
+        return "vision: off"
+    import io
+    bad = conflict_words(subject.union(*(alts or [])))
+    if not bad:
+        return "vision: no look-alikes known"
+    try:
+        small = img.convert("RGB")
+        small.thumbnail((384, 384))
+        buf = io.BytesIO()
+        small.save(buf, "JPEG", quality=80)
+        ans = _ask(buf.getvalue())
+    except (PipelineError, OSError) as e:
+        log.warning("picture check skipped: %s", e)
+        return "vision: unavailable"
+    if judge(ans, subject, alts or [], bad) is False:
+        raise LookAlike(f"the picture shows something else ({ans[:40]}), not the subject")
+    return f"vision: {ans[:40]}"

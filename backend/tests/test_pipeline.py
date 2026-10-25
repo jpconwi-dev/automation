@@ -131,7 +131,7 @@ def test_explainer_exact_length_music_effects_and_cleanup():
         vid = Path(settings.projects_dir / p["id"] / "video.mp4")
         assert abs(probe(vid) - 30.0) < 0.15, probe(vid)          # the UI promises exactly 0:30
         assert mean_volume(vid) > -50                               # narration + music + effects are audible
-        assert any(vc == "Test Voice" for vc, _ in CALLS) and max(sp for _, sp in CALLS) >= 1.2   # voice + speed reach the TTS (tones no longer speed the voice up)
+        assert any(vc == "Test Voice" for vc, _ in CALLS)   # the chosen voice reaches the TTS; the speed is applied afterwards by re-timing (see test_voice_captions_schedule.py)
         proj = c.get(f"/api/projects/{p['id']}").json()
         assert proj["video_seconds"] == 30.0 and proj["tone"] == "energetic" and proj["sound_effects"] is True
         left = [f.name for f in (settings.projects_dir / p["id"]).iterdir() if f.name.endswith(("_clip.mp4", "_bg.png", "_a.png", "_b.png", "_text.png"))]

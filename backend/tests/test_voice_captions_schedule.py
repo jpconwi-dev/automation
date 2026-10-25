@@ -23,7 +23,7 @@ def test_segments_give_each_sentence_its_own_feeling():
     segs = delivery.segment("It sits on a branch. One bite is deadly. Their hearts beat 1,200 times a minute. "
                             "Which fact surprised you most?", None, True, 1.0)
     assert [s.emotion for s in segs] == ["neutral", "serious", "awe", "question"]
-    assert segs[-1].absolute and segs[-1].speed <= delivery.QUESTION_SPEED_CEIL and segs[-1].gap_before >= 0.4
+    assert segs[-1].absolute and segs[-1].speed < 0.95 and segs[-1].gap_before >= 0.4
     assert segs[1].pitch < 0 < segs[2].gain          # serious sits lower, amazement is a little louder
     assert segs[2].gap_before > segs[1].gap_before   # the amazed line is given room to land first
 
@@ -165,3 +165,145 @@ def test_no_word_is_ever_lost_or_repeated_by_the_card_splitter():
             assert [w for c in cards for w in c] == words
     # a trailing single word is folded into the card before it, and nothing else moves
     assert captions.split_cards("one two three four five".split(), 22) == [["one", "two", "three", "four", "five"]]
+
+
+# ---------- found in a real video: overlapping cards, text off the screen, snail instead of snailfish ----------
+
+def test_caption_events_never_overlap():
+    import random
+    rnd = random.Random(9)
+    words = "a jelly-like body bones 1,200 times a minute fast, deep. Which fact amazes you most?".split()
+    for _ in range(300):
+        t, cues = 0.3, []
+        for _ in range(rnd.randint(1, 5)):
+            text = " ".join(rnd.choice(words) for _ in range(rnd.randint(1, 16)))
+            length = rnd.uniform(0.3, 5)
+            cues.append((text, t, length, rnd.choice(["neutral", "awe", "question"])))
+            t += length + rnd.uniform(0, 0.6)
+        ev = sorted(captions.events(cues, 22, t + 1), key=lambda e: e[0])
+        for a, b in zip(ev, ev[1:]):
+            assert a[1] <= b[0] + 1e-6, (a, b)
+
+
+def test_captions_shrink_to_fit_when_the_text_is_wider_than_the_screen(tmp_path):
+    from app.services import render
+    import shutil
+    (tmp_path / "fonts").mkdir()
+    for f in render.FONT_DIR.glob("*.ttf"):
+        shutil.copy(f, tmp_path / "fonts" / f.name)
+    assert captions.fit_scale("reaches about 1,100 atm", 720, 1280, "9:16", tmp_path) == 1.0       # fits as designed
+    wide = captions.fit_scale("reaches about 1,100 atm daily, always", 720, 1280, "9:16", tmp_path)
+    assert 0.45 <= wide < 1.0                                                                       # too wide: made smaller
+    assert not (tmp_path / "fit.png").exists()                                                      # no scratch files left
+
+
+def test_ai_picture_of_a_look_alike_is_drawn_again(monkeypatch, tmp_path):
+    from types import SimpleNamespace
+    from PIL import Image
+    from app.core.config import settings
+    from app.services import cloudflare, images, vision
+    prompts = []
+    monkeypatch.setattr(settings, "stock_ai_fallback", True)
+    monkeypatch.setattr(cloudflare, "configured", lambda: True)
+    monkeypatch.setattr(images, "_generate_cloudflare", lambda prompt, seed, size: (prompts.append(prompt), Image.new("RGB", size, (40, 60, 80)))[1])
+    monkeypatch.setattr(vision, "enabled", lambda: True)
+    answers = iter(["A snail with an orange shell.", "A snail.", "A translucent fish."])
+    monkeypatch.setattr(vision, "_ask", lambda jpeg: next(answers))
+    script = SimpleNamespace(title="Snailfish", subject_look="a small translucent pink deep-sea fish with a tadpole-shaped body; a fish, not a snail")
+    scene = SimpleNamespace(visual_description="swimming near the seabed", on_screen_text="8,000 M")
+    meta = images._ai_scene_fallback({"subject": "snailfish", "subject_aliases": []}, script, scene, (360, 640), 1, 2, tmp_path)
+    assert meta and meta["vision"].startswith("vision: A translucent fish")
+    assert len(prompts) == 3                                                  # two snails thrown away, the fish kept
+    assert "translucent pink deep-sea fish" in prompts[0] and "not a snail" in prompts[0]   # appearance leads, not just the name
+
+
+def test_a_picture_that_never_shows_the_subject_is_not_used(monkeypatch, tmp_path):
+    from types import SimpleNamespace
+    from PIL import Image
+    from app.core.config import settings
+    from app.services import cloudflare, images, vision
+    monkeypatch.setattr(settings, "stock_ai_fallback", True)
+    monkeypatch.setattr(cloudflare, "configured", lambda: True)
+    monkeypatch.setattr(images, "_generate_cloudflare", lambda prompt, seed, size: Image.new("RGB", size))
+    monkeypatch.setattr(vision, "enabled", lambda: True)
+    monkeypatch.setattr(vision, "_ask", lambda jpeg: "A snail.")
+    script = SimpleNamespace(title="Snailfish", subject_look="")
+    scene = SimpleNamespace(visual_description="x", on_screen_text="")
+    assert images._ai_scene_fallback({"subject": "snailfish"}, script, scene, (360, 640), 1, 2, tmp_path) is None
+
+
+def test_snailfish_look_alikes_are_known():
+    assert {"snail", "shell"} <= vision_conflicts("snailfish")
+
+
+def vision_conflicts(word):
+    from app.services import vision
+    return vision.conflict_words({word})
+
+
+# ---------- one steady speaking rate ----------
+
+def test_the_speaking_rate_is_levelled_across_sentences(tmp_path, monkeypatch):
+    calls = []
+
+    def uneven(text, language, out_path, *, voice="auto", speed=1.0, **_):
+        # the voice is 25% fast on the first sentence and 25% slow on the third, as MeloTTS does
+        k = len(calls); calls.append(text)
+        secs = delivery.syllables(text) * 0.25 * (0.8, 1.0, 1.25)[k % 3]
+        _wav(out_path, secs + 0.3)          # + silence-ish padding on both ends is trimmed away again
+        return secs
+    monkeypatch.setattr(pipeline.tts, "synthesize", uneven)
+    project = {"language": "en-us", "voice": "auto", "voice_speed": 1.0}
+    text = "It sits on a branch of the old tree today. One bite is deadly for most small fish. Their hearts beat 1,200 times a minute."
+    total, cues = pipeline._speak_scene(text, None, False, project, tmp_path / "s.wav", 1.0, False)
+    per_syllable = [ln / delivery.syllables(t) for t, st, ln, emo in cues]
+    assert len(per_syllable) == 3
+    assert max(per_syllable) / min(per_syllable) < 1.25      # was 1.56 (1.25 / 0.8) before levelling
+
+
+def test_closing_question_stays_slower_than_the_rest_and_ignores_the_speed_up(tmp_path, monkeypatch):
+    def steady(text, language, out_path, *, voice="auto", speed=1.0, **_):
+        secs = delivery.syllables(text) * 0.25
+        _wav(out_path, secs)
+        return secs
+    monkeypatch.setattr(pipeline.tts, "synthesize", steady)
+    project = {"language": "en-us", "voice": "auto", "voice_speed": 0.95}
+    text = "Their hearts beat 1,200 times a minute and that is the fastest of all the birds. Which fact amazed you the most?"
+    rates = {}
+    parts = pipeline._synth_parts(text, None, True, project, tmp_path / "s.wav", False)
+    natural = pipeline._natural_rate([parts])
+    for speed in (0.95, 1.15):                                # the second is the video being squeezed to fit its length
+        _, cues = pipeline._assemble(parts, tmp_path / f"s{speed}.wav", natural, speed, 0.95, False)
+        rates[speed] = [ln / delivery.syllables(t) for t, st, ln, emo in cues]
+    assert rates[0.95][1] > rates[0.95][0] * 1.05             # the question is the slowest thing in the scene
+    assert rates[1.15][1] == pytest.approx(rates[0.95][1], rel=0.06)   # and does not speed up with the rest
+    assert rates[1.15][0] < rates[0.95][0]                    # while the rest does
+
+
+def test_trim_silence_and_syllables(tmp_path):
+    import math
+    p = tmp_path / "a.wav"
+    with wave.open(str(p), "wb") as w:
+        w.setnchannels(1); w.setsampwidth(2); w.setframerate(24000)
+        w.writeframes(b"\x00\x00" * 12000 + b"".join(int(3000 * math.sin(i / 10)).to_bytes(2, "little", signed=True) for i in range(24000)) + b"\x00\x00" * 24000)
+    voiced = delivery.trim_silence(p)
+    assert voiced == pytest.approx(1.0, abs=0.02)
+    with wave.open(str(p)) as w:
+        assert w.getnframes() / 24000 == pytest.approx(1.08, abs=0.03)   # 1 s of speech plus two 40 ms margins
+    assert delivery.syllables("The Arctic tern flies") == 5
+    assert delivery.syllables("1,200") >= 4 and delivery.syllables("你好世界", cjk=True) == 4
+
+
+def test_the_chosen_voice_speed_still_changes_how_fast_it_talks(tmp_path, monkeypatch):
+    def steady(text, language, out_path, *, voice="auto", speed=1.0, **_):
+        secs = delivery.syllables(text) * 0.25
+        _wav(out_path, secs)
+        return secs
+    monkeypatch.setattr(pipeline.tts, "synthesize", steady)
+    project = {"language": "en-us", "voice": "auto", "voice_speed": 1.0}
+    text = "It sits on a branch of the old tree today and waits for the rain to come down."
+    parts = pipeline._synth_parts(text, None, False, project, tmp_path / "s.wav", False)
+    natural = pipeline._natural_rate([parts])
+    slow, _ = pipeline._assemble(parts, tmp_path / "a.wav", natural, 0.9, 0.9, False)
+    fast, _ = pipeline._assemble(parts, tmp_path / "b.wav", natural, 1.2, 1.2, False)
+    assert fast < slow * 0.85

@@ -23,13 +23,15 @@ EMOTIONS = ("neutral", "curious", "excited", "awe", "serious", "playful", "quest
 # sound curious and the next one amazed instead of everything arriving in the same flat tone.
 _PROFILE = {
     "neutral": (1.00, 0.00, 0.00, 0.0, 0.0),
-    "curious": (0.96, 0.10, 0.10, 0.8, 0.0),
-    "excited": (1.05, 0.00, 0.00, 1.2, 1.0),
-    "awe": (0.92, 0.12, 0.25, -0.4, 1.0),
-    "serious": (0.94, 0.08, 0.15, -1.0, -0.5),
-    "playful": (1.03, 0.00, 0.00, 1.0, 0.5),
+    "curious": (0.98, 0.10, 0.10, 0.8, 0.0),
+    "excited": (1.03, 0.00, 0.00, 1.2, 1.0),
+    "awe": (0.96, 0.12, 0.25, -0.4, 1.0),
+    "serious": (0.97, 0.08, 0.15, -1.0, -0.5),
+    "playful": (1.02, 0.00, 0.00, 1.0, 0.5),
     "question": (0.88, 0.55, 1.30, 1.0, 0.5),
 }
+# The pace multipliers are deliberately small: the voice used to swing between fast and slow from sentence to sentence.
+# Feeling comes from pitch, loudness and pauses; pace stays within a few percent of the video's steady speaking rate.
 QUESTION_SPEED_FLOOR, QUESTION_SPEED_CEIL = 0.82, 0.98  # a question is never rushed, whatever the video length
 
 _AWE = {"incredible", "astonishing", "impossible", "unbelievable", "massive", "enormous", "billion", "million",
@@ -198,9 +200,75 @@ def segment(narration: str, hint: str | None, is_last: bool, voice_speed: float 
         mult, lead, _, pitch, gain = _PROFILE[emo]
         body = " ".join(sents)
         if emo == "question":
-            speed = max(QUESTION_SPEED_FLOOR, min(QUESTION_SPEED_CEIL, voice_speed * mult))
-            out.append(Segment(question_text(body), body, emo, round(speed, 3), True, pitch, gain, lead if k else 0.0))
+            out.append(Segment(question_text(body), body, emo, mult, True, pitch, gain, lead if k else 0.0))
             continue
         prev = _PROFILE[runs[k - 1][0]][2] if k else 0.0  # an amazed line is given a moment to land before the next one
         out.append(Segment(body, body, emo, mult, False, pitch, gain, (0.14 + prev) if k else 0.0))
     return out
+
+
+# ---------- a steady speaking rate ----------
+# MeloTTS speaks short sentences faster and long ones slower, and every call differs a little, so a video made of many
+# sentences used to sound rushed in one place and dragging in the next. Each piece is measured (syllables per second of
+# real speech, silence at the edges ignored) and gently re-timed towards one rate for the whole video.
+
+def syllables(text: str, cjk: bool = False) -> float:
+    """A rough count of how much there is to say; digits count more than letters ('1,200' is four spoken words)."""
+    if cjk:
+        return float(max(1, len(re.sub(r"\s", "", text))))
+    total = 0.0
+    for w in text.split():
+        digits = sum(c.isdigit() for c in w)
+        if digits:
+            total += max(2.0, digits * 1.6)
+            continue
+        groups = len(re.findall(r"[aeiouy]+", w.lower()))
+        if w.lower().rstrip(".,!?;:").endswith("e") and groups > 1:
+            groups -= 1
+        total += max(1, groups)
+    return max(1.0, total)
+
+
+def _samples(path):
+    import array
+    with wave.open(str(path), "rb") as w:
+        rate, ch, width, raw = w.getframerate(), w.getnchannels(), w.getsampwidth(), w.readframes(w.getnframes())
+    if width != 2:
+        return None, rate, ch, raw
+    a = array.array("h")
+    a.frombytes(raw[: len(raw) // 2 * 2])
+    return a, rate, ch, raw
+
+
+def trim_silence(path, margin: float = 0.04) -> float:
+    """Cut the silence the voice puts before and after a sentence (so pauses are the ones we plan, not random ones) and
+    return the seconds of real speech. A file with no sound at all is left as it is."""
+    a, rate, ch, raw = _samples(path)
+    if a is None or not len(a):
+        with wave.open(str(path), "rb") as w:
+            return w.getnframes() / w.getframerate()
+    peak = max(max(a), -min(a))
+    if peak <= 0:
+        return len(a) / (rate * ch)
+    gate = peak * 0.03
+    first = next((i for i, v in enumerate(a) if abs(v) > gate), 0) // ch
+    last = (len(a) - 1 - next((i for i, v in enumerate(reversed(a)) if abs(v) > gate), 0)) // ch
+    keep0, keep1 = max(0, first - int(margin * rate)), min(len(a) // ch, last + int(margin * rate) + 1)
+    with wave.open(str(path), "wb") as w:
+        w.setnchannels(ch)
+        w.setsampwidth(2)
+        w.setframerate(rate)
+        w.writeframes(a[keep0 * ch: keep1 * ch].tobytes())
+    return max(0.05, (last - first + 1) / rate)
+
+
+def retime(src, dst, factor: float) -> None:
+    """Speak `factor` times faster (pitch unchanged). Without ffmpeg or for a tiny change the file is copied as it is."""
+    import shutil
+    if abs(factor - 1.0) < 0.02:
+        shutil.copy(src, dst)
+        return
+    r = subprocess.run([settings.ffmpeg_path, "-y", "-v", "error", "-i", str(src), "-filter:a",
+                        f"atempo={max(0.5, min(2.0, factor)):.4f}", "-c:a", "pcm_s16le", str(dst)], capture_output=True, timeout=120)
+    if r.returncode != 0 or not Path(dst).exists():
+        shutil.copy(src, dst)

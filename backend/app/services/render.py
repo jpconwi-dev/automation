@@ -1,3 +1,4 @@
+import logging
 import re
 import shutil
 import subprocess
@@ -7,6 +8,8 @@ from pathlib import Path
 from ..core.config import settings
 from ..core.errors import Cancelled, PipelineError
 from . import captions
+
+log = logging.getLogger("render")
 
 # Quality presets. "standard" is exactly what was used before, so nothing changes unless VIDEO_QUALITY=high is set.
 PRESETS = {
@@ -105,7 +108,13 @@ def write_ass(pdir: Path, scenes, starts: list[float], speech: list[float], cues
     (pdir / "fonts").mkdir(exist_ok=True)
     for f in FONT_DIR.glob("*.ttf"):
         shutil.copy(f, pdir / "fonts" / f.name)
-    (pdir / "subtitles.ass").write_text(captions.build_ass(flat, W, H, aspect, total), encoding="utf-8")
+    if not any((pdir / "fonts").glob("Poppins*.ttf")):
+        log.warning("Poppins font is missing from the deployment (app/assets/fonts); captions use a fallback font")
+    scale = captions.fit_scale(captions.widest_card(flat, captions.LAYOUT.get(aspect, captions.LAYOUT["9:16"])[1]), W, H, aspect,
+                               pdir, settings.ffmpeg_path)
+    if scale < 1.0:
+        log.warning("captions shrunk to %.0f%% so they fit the screen", scale * 100)
+    (pdir / "subtitles.ass").write_text(captions.build_ass(flat, W, H, aspect, total, scale), encoding="utf-8")
 
 
 def render_video(project: dict, scenes, durations: list[float], speech: list[float], pdir: Path,
